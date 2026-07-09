@@ -11,5 +11,10 @@
   },
   "lint": {
     "exclude": ["static/vendor/"]
+  },
+  "deploy": {
+    "org": "paulkinlan-ea",
+    "app": "webtorrent-drop"
   }
 }
+
