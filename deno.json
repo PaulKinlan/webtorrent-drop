@@ -1,0 +1,15 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-net --allow-read --allow-env server.ts",
+    "start": "deno run --allow-net --allow-read --allow-env server.ts",
+    "check": "deno check server.ts",
+    "fmt": "deno fmt"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "exclude": ["static/vendor/"]
+  },
+  "lint": {
+    "exclude": ["static/vendor/"]
+  }
+}

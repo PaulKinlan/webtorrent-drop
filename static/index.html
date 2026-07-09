@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webtorrent-drop</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main>
+  <h1>webtorrent&#8209;drop</h1>
+  <p class="lede">Drop a folder. It becomes a website, seeded from this tab over WebTorrent.
+  Nothing is uploaded. This server never sees your files.</p>
+
+  <div id="drop" class="drop" tabindex="0" role="button"
+       aria-label="Drop a folder here, or press Enter to choose one">
+    <svg class="drop__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 15V3"/><path d="m7 8 5-5 5 5"/>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    </svg>
+    <p class="drop__title">Drop a folder here</p>
+    <p class="drop__hint">It needs an <code>index.html</code>. Or <button type="button" id="pick" class="linkish">choose a folder</button>.</p>
+    <input type="file" id="file" webkitdirectory directory multiple hidden>
+  </div>
+
+  <section id="status" class="panel" hidden>
+    <div class="row">
+      <span class="dot" id="dot"></span>
+      <strong id="state">Hashing…</strong>
+      <span class="spacer"></span>
+      <span class="muted" id="stats"></span>
+    </div>
+
+    <div id="share" hidden>
+      <label class="label" for="url">Your site is live while this tab stays open</label>
+      <div class="row">
+        <input id="url" class="url" readonly spellcheck="false">
+        <button type="button" id="copy" class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span>Copy</span>
+        </button>
+        <a id="open" class="btn" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15 3h6v6"/><path d="M10 14 21 3"/>
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          </svg>
+          <span>Open</span>
+        </a>
+      </div>
+      <p class="warn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 9v4"/><path d="M12 17h.01"/>
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        </svg>
+        Close this tab and the site goes with it, unless someone else is still viewing it.
+        That is the deal: browsers cannot seed in the background.
+      </p>
+    </div>
+
+    <ul id="files" class="files"></ul>
+  </section>
+
+  <p id="error" class="error" hidden></p>
+
+  <footer class="byline">
+    Peer-to-peer, ephemeral, and gone when you close the tab.
+    <a href="https://github.com/PaulKinlan/webtorrent-drop">Source</a>.
+  </footer>
+</main>
+
+<script src="/vendor/webtorrent.min.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
