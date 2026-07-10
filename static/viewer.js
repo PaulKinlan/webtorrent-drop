@@ -3,6 +3,9 @@
 // The WebTorrent service worker answers /webtorrent/* by messaging a *window client* of
 // this origin that holds a running WebTorrent server. That client is this page. So this
 // page must stay alive: we render the site in an iframe rather than navigating to it.
+// WebTorrent's vendored bundle is an ES module (default export); import it, don't rely on a
+// global from a classic <script> (which throws "Unexpected token 'export'").
+import WebTorrent from "/vendor/webtorrent.min.js";
 import {
   currentInfoHash,
   findEntryFile,

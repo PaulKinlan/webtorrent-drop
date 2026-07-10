@@ -77,12 +77,12 @@ addEventListener("unhandledrejection", (e) => {
   });
 });
 
-// Environment snapshot, once, so we can correlate failures with capability.
+// Environment snapshot, once, so we can correlate failures with capability. WebTorrent is
+// an ES module imported by app/viewer, not a global, so it is not detectable from here.
 track("pageview", {
   ua: navigator.userAgent.slice(0, 200),
   sw: "serviceWorker" in navigator,
   secure: isSecureContext,
-  wt: typeof WebTorrent !== "undefined",
   rtc: typeof RTCPeerConnection !== "undefined",
   dpr: devicePixelRatio,
   vw: innerWidth,

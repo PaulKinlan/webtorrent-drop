@@ -1,4 +1,7 @@
 // The drop page: turn a dropped folder into a torrent and seed it from this tab.
+// The vendored WebTorrent bundle is an ES module with a default export, so it must be
+// imported here rather than loaded as a classic <script> (which throws on `export`).
+import WebTorrent from "/vendor/webtorrent.min.js";
 import { formatBytes, LOG, randomKey, sha256Hex, shareUrl, TRACKERS } from "/common.js";
 import { track } from "/telemetry.js";
 
@@ -59,6 +62,11 @@ function fail(msg) {
 // constructor threw (a bad browser, a blocked API), the whole module aborted, no handlers
 // attached, and selecting a folder did nothing with no visible error. Now any failure
 // surfaces in the UI instead of vanishing into the console.
+// Prove the WebTorrent module import resolved to a constructor (for verification/debugging).
+globalThis.__WT = typeof WebTorrent === "function";
+document.documentElement.dataset.wt = String(globalThis.__WT);
+console.log(LOG, "WebTorrent module loaded:", globalThis.__WT);
+
 let client = null;
 function getClient() {
   if (!client) {
