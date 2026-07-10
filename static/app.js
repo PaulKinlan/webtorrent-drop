@@ -1,7 +1,7 @@
 // The drop page: turn a dropped folder into a torrent and seed it from this tab.
 // The vendored WebTorrent bundle is an ES module with a default export, so it must be
 // imported here rather than loaded as a classic <script> (which throws on `export`).
-import WebTorrent from "/vendor/webtorrent.min.js";
+import WebTorrent from "/vendor/webtorrent.v2.min.js";
 import { formatBytes, LOG, randomKey, sha256Hex, shareUrl, TRACKERS } from "/common.js";
 import { track } from "/telemetry.js";
 

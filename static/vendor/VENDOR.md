@@ -16,3 +16,7 @@ allowed (our viewer and the served files share the `<infohash>.unhosted.dev` ori
 cross-origin framing is still blocked:
 
     sed -i "s/frame-ancestors 'none'/frame-ancestors 'self'/" webtorrent.min.js
+
+> The file is named `webtorrent.v2.min.js` (bumped from `webtorrent.min.js`) to
+> cache-bust the frame-ancestors patch past Cloudflare/browser caches. Bump the suffix
+> whenever the bundle changes.
