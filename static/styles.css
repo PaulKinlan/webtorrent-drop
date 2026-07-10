@@ -29,6 +29,13 @@
   box-sizing: border-box;
 }
 
+/* The `hidden` attribute must always win. An author `display` rule (grid/flex/block on
+   .overlay, .frame, .btn, .error…) otherwise overrides the UA `[hidden]{display:none}`,
+   leaving "hidden" elements painted — e.g. the loading overlay covering a rendered site. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
