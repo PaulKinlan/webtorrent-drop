@@ -34,8 +34,6 @@ const dropEl = document.getElementById("drop");
 const dirEl = document.getElementById("dir");
 // NB: id must not be "files" — the <ul> listing the seeded files already owns that id.
 const filesInputEl = document.getElementById("filePick");
-const pickDirEl = document.getElementById("pickDir");
-const touchNoteEl = document.getElementById("touchNote");
 const dropTitleEl = document.getElementById("dropTitle");
 const statusEl = document.getElementById("status");
 const stateEl = document.getElementById("state");
@@ -286,21 +284,18 @@ dropEl.addEventListener("drop", async (e) => {
   }
 });
 
-// Directory pickers do not exist on Android or iOS: `webkitdirectory` is desktop-only, so
-// that control would simply do nothing there. Detect a touch device and hide it rather than
-// leave a dead button, steering to the files picker instead.
-const isTouch = matchMedia("(pointer: coarse)").matches;
-if (isTouch) {
-  pickDirEl.hidden = true;
-  touchNoteEl.hidden = false;
-  dropTitleEl.textContent = "Pick the files for your site";
-  console.log(LOG, "touch device: no folder picker, offering files instead");
+// The folder picker (webkitdirectory) works on modern mobile too: Chrome Android 132+,
+// iOS Safari 18.4+ (per MDN browser-compat-data), plus all desktop. So show it everywhere
+// and keep "Choose files" as the alternative for older browsers. Coarse pointers cannot
+// drag, so just adjust the wording.
+if (matchMedia("(pointer: coarse)").matches) {
+  dropTitleEl.textContent = "Choose a folder to host";
 }
 
-// Clicking the zone opens the folder picker on desktop, but never swallow clicks that are
-// already headed for a real <label>, or we would open and immediately re-open the dialog.
+// Clicking the zone opens the folder picker, but never swallow clicks already headed for a
+// real <label>/<input>, or we would open and immediately re-open the dialog.
 dropEl.addEventListener("click", (e) => {
-  if (isTouch || e.target.closest("label, input")) return;
+  if (e.target.closest("label, input")) return;
   dirEl.click();
 });
 

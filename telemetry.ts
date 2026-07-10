@@ -177,11 +177,84 @@ export async function handleTelemetry(
     return await siteLog(req);
   }
 
+  if (path === "/_admin" && req.method === "POST") {
+    return await adminLogin(req);
+  }
   if (path === "/_admin" && req.method === "GET") {
     return await admin(req);
   }
 
   return null;
+}
+
+const SESSION_MS = 12 * 60 * 60 * 1000; // 12h admin session
+
+function parseCookies(req: Request): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (req.headers.get("cookie") ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
+  return out;
+}
+
+async function hasAdminSession(req: Request): Promise<boolean> {
+  const sid = parseCookies(req)["wtd_admin"];
+  if (!sid) return false;
+  return !!(await kv.get(["admin-session", sid])).value;
+}
+
+/** Verify the admin password from a login form and, on success, start a cookie session. */
+async function adminLogin(req: Request): Promise<Response> {
+  const token = Deno.env.get("REPORT_ADMIN_TOKEN");
+  if (!token) return new Response("Admin disabled", { status: 503 });
+
+  const form = new URLSearchParams(await req.text());
+  const pw = form.get("password") ?? "";
+  if (!pw || !timingSafeEqual(pw, token)) {
+    return new Response(loginForm("Wrong password."), {
+      status: 401,
+      headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+    });
+  }
+  const sid = crypto.randomUUID();
+  await kv.set(["admin-session", sid], { at: Date.now() }, { expireIn: SESSION_MS });
+  // HttpOnly (JS can't read it), Secure (HTTPS only), SameSite=Strict (no cross-site sends).
+  return new Response(null, {
+    status: 303,
+    headers: {
+      "location": "/_admin",
+      "set-cookie": `wtd_admin=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${
+        SESSION_MS / 1000
+      }`,
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+function loginForm(error = ""): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>admin · unhosted.dev</title>
+<style>
+  body{font:15px/1.5 system-ui,sans-serif;background:#0f1115;color:#e6e9ef;display:grid;
+    place-items:center;min-height:100dvh;margin:0}
+  form{background:#161a20;border:1px solid #262b33;border-radius:12px;padding:1.5rem;width:min(22rem,90vw)}
+  h1{font-size:1rem;margin:0 0 1rem}
+  input{width:100%;box-sizing:border-box;padding:.6rem;border-radius:8px;border:1px solid #262b33;
+    background:#0f1115;color:#e6e9ef;font:inherit}
+  button{margin-top:.75rem;width:100%;padding:.6rem;border-radius:8px;border:0;background:#2563eb;
+    color:#fff;font:inherit;font-weight:600;cursor:pointer}
+  .err{color:#f87171;font-size:.85rem;margin:.5rem 0 0}
+</style></head><body>
+<form method="post" action="/_admin" autocomplete="off">
+  <h1>unhosted.dev — telemetry</h1>
+  <input type="password" name="password" placeholder="Admin password" autofocus required>
+  <button type="submit">Sign in</button>
+  ${error ? `<p class="err">${esc(error)}</p>` : ""}
+</form>
+</body></html>`;
 }
 
 // Owner-scoped activity log: every viewer loads the bootstrap from us, so these are the
@@ -209,11 +282,14 @@ async function siteLog(req: Request): Promise<Response> {
 
   if (url.searchParams.get("format") === "json") {
     return new Response(JSON.stringify({ hash, count: events.length, events }, null, 2), {
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "referrer-policy": "no-referrer",
+      },
     });
   }
   return new Response(siteHtml(hash, events), {
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
   });
 }
 
@@ -230,7 +306,6 @@ function timingSafeEqual(a: string, b: string): boolean {
 async function admin(req: Request): Promise<Response> {
   const token = Deno.env.get("REPORT_ADMIN_TOKEN");
   const url = new URL(req.url);
-  const given = url.searchParams.get("token") ?? req.headers.get("x-admin-token") ?? "";
 
   if (!token) {
     return new Response(
@@ -238,8 +313,30 @@ async function admin(req: Request): Promise<Response> {
       { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } },
     );
   }
-  if (!given || !timingSafeEqual(given, token)) {
-    return new Response("Forbidden", { status: 403 });
+
+  // Log out: drop the session and clear the cookie.
+  if (url.searchParams.get("logout") !== null) {
+    const sid = parseCookies(req)["wtd_admin"];
+    if (sid) await kv.delete(["admin-session", sid]);
+    return new Response(loginForm("Signed out."), {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "set-cookie": "wtd_admin=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
+        "referrer-policy": "no-referrer",
+      },
+    });
+  }
+
+  // Auth is a cookie session (from the login form) or an x-admin-token header (for scripts).
+  // Never a URL query param, so the secret can't leak via referer, history, or logs.
+  const headerTok = req.headers.get("x-admin-token");
+  const authed = (headerTok != null && timingSafeEqual(headerTok, token)) ||
+    await hasAdminSession(req);
+  if (!authed) {
+    return new Response(loginForm(), {
+      status: 401,
+      headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+    });
   }
 
   const limit = Math.min(Number(url.searchParams.get("limit") ?? "200"), MAX_LIST);
@@ -254,11 +351,14 @@ async function admin(req: Request): Promise<Response> {
 
   if (url.searchParams.get("format") === "json") {
     return new Response(JSON.stringify({ count: events.length, events }, null, 2), {
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "referrer-policy": "no-referrer",
+      },
     });
   }
   return new Response(adminHtml(events), {
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
   });
 }
 
@@ -370,7 +470,8 @@ function adminHtml(events: Stored[]): string {
   .empty{padding:3rem 1.25rem;color:#9aa4b2}
 </style></head><body>
 <header>
-  <h1>telemetry — ${events.length} recent event${events.length === 1 ? "" : "s"}</h1>
+  <h1>telemetry — ${events.length} recent event${events.length === 1 ? "" : "s"}
+    <a href="/_admin?logout" style="float:right;font-size:.8rem;color:#9aa4b2">sign out</a></h1>
   <div>${summary || '<span class="small">nothing yet</span>'}</div>
 </header>
 ${
