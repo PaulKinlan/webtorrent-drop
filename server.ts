@@ -22,7 +22,17 @@ const PORT = Number(Deno.env.get("PORT") ?? 8000);
 // Point browsers' Reporting API at our own endpoint. A `default` endpoint automatically
 // receives deprecation, intervention, and crash reports. Our app also POSTs custom events
 // to /_beacon. Both land in Deno KV; inspect at /_admin (token-gated).
-const REPORTING = { "reporting-endpoints": 'default="/_report"' };
+//
+// The CSP is Report-Only: it enforces nothing (so it can never break a page) but makes the
+// browser post any violation to /_report. report-to is the modern channel; report-uri is
+// the legacy one still honoured by many browsers. This is the "report-uri" error reporting.
+const HTML_HEADERS = {
+  "reporting-endpoints": 'default="/_report"',
+  "content-security-policy-report-only":
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self'; connect-src 'self' wss: https:; frame-src 'self' blob:; " +
+    "object-src 'none'; base-uri 'none'; report-to default; report-uri /_report",
+};
 
 /** A v1 infohash is 40 hex chars; a base32 one is 32 chars. Both are legal DNS labels. */
 const HEX40 = /^[0-9a-f]{40}$/i;
@@ -97,15 +107,15 @@ Deno.serve({ port: PORT }, async (req, info) => {
 
   // Subdomain mode: <infohash>.domain serves the viewer for that hash.
   if (hostHash) {
-    if (path === "/" || path === "/index.html") return staticFile("viewer.html", REPORTING);
+    if (path === "/" || path === "/index.html") return staticFile("viewer.html", HTML_HEADERS);
     return new Response("Not found", { status: 404 });
   }
 
   // Path mode (stopgap): /<infohash> serves the viewer.
   const first = path.slice(1).split("/")[0];
-  if (first && isInfoHash(first)) return staticFile("viewer.html", REPORTING);
+  if (first && isInfoHash(first)) return staticFile("viewer.html", HTML_HEADERS);
 
-  if (path === "/" || path === "/index.html") return staticFile("index.html", REPORTING);
+  if (path === "/" || path === "/index.html") return staticFile("index.html", HTML_HEADERS);
 
   return new Response("Not found", { status: 404 });
 });

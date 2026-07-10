@@ -1,6 +1,34 @@
 // The drop page: turn a dropped folder into a torrent and seed it from this tab.
-import { formatBytes, LOG, shareUrl, TRACKERS } from "/common.js";
+import { formatBytes, LOG, randomKey, sha256Hex, shareUrl, TRACKERS } from "/common.js";
 import { track } from "/telemetry.js";
+
+/**
+ * Register a freshly-seeded site and hand back the owner's private activity-log URL.
+ * We mint a random owner key, send only its hash to the server (so the server can gate the
+ * log to us without ever holding the key), and keep the key in localStorage so the same
+ * browser keeps access across reloads.
+ */
+async function registerSite(infoHash, meta) {
+  const storeKey = `wtd-owner-${infoHash}`;
+  let key = localStorage.getItem(storeKey);
+  if (!key) {
+    key = randomKey();
+    try {
+      localStorage.setItem(storeKey, key);
+    } catch { /* private mode: the link below still works this session */ }
+  }
+  try {
+    const ownerKeyHash = await sha256Hex(key);
+    await fetch("/_register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ infoHash, ownerKeyHash, meta }),
+    });
+  } catch (err) {
+    console.warn(LOG, "register failed (activity log may be unavailable):", err);
+  }
+  return `/_site?hash=${infoHash}&key=${key}`;
+}
 
 const dropEl = document.getElementById("drop");
 const dirEl = document.getElementById("dir");
@@ -17,6 +45,7 @@ const shareEl = document.getElementById("share");
 const urlEl = document.getElementById("url");
 const copyEl = document.getElementById("copy");
 const openEl = document.getElementById("open");
+const activityEl = document.getElementById("activity");
 const filesEl = document.getElementById("files");
 const errorEl = document.getElementById("error");
 
@@ -202,6 +231,13 @@ function seed(files) {
     shareEl.hidden = false;
     dotEl.classList.add("is-live");
     stateEl.textContent = generated ? "Seeding (file browser)" : "Seeding";
+
+    // Register the site and reveal the owner's private activity log.
+    registerSite(torrent.infoHash, { name: name ?? null, files: files.length, bytes: total })
+      .then((activityUrl) => {
+        activityEl.href = activityUrl;
+        activityEl.hidden = false;
+      });
 
     const tick = () => {
       statsEl.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"} · ` +

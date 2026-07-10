@@ -19,6 +19,17 @@ const TTL_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
 const MAX_BODY = 32 * 1024; // refuse oversized posts
 const MAX_LIST = 1000;
 
+const HEX40 = /^[0-9a-f]{40}$/i;
+const BASE32 = /^[a-z2-7]{32}$/i;
+function isInfoHash(s: unknown): s is string {
+  return typeof s === "string" && (HEX40.test(s) || BASE32.test(s));
+}
+
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Truncate an IP so a log of "who loaded what" is coarse: IPv4 -> /16, IPv6 -> /48. */
 export function truncateIp(raw: string | null): string {
   if (!raw) return "";
@@ -78,8 +89,14 @@ async function store(
     data,
   };
   // Key sorts newest-first: a smaller leading number lists earlier in ascending order.
-  const key = ["ev", Number.MAX_SAFE_INTEGER - at, id];
-  await kv.set(key, rec, { expireIn: TTL_MS });
+  const rev = Number.MAX_SAFE_INTEGER - at;
+  const atomic = kv.atomic().set(["ev", rev, id], rec, { expireIn: TTL_MS });
+  // Also index under the site's infohash so its owner can pull just their activity.
+  const ih = (data as { infoHash?: unknown })?.infoHash;
+  if (isInfoHash(ih)) {
+    atomic.set(["site-ev", ih.toLowerCase(), rev, id], rec, { expireIn: TTL_MS });
+  }
+  await atomic.commit();
 }
 
 async function readBody(req: Request): Promise<unknown | null> {
@@ -134,11 +151,70 @@ export async function handleTelemetry(
     return new Response(null, { status: 204, headers: cors });
   }
 
+  // Seed-time registration: the drop page tells us a new site exists and the SHA-256 of an
+  // owner key it generated (we never see the raw key). This both records the site and gates
+  // its activity log to whoever holds the key.
+  if (path === "/_register" && req.method === "POST") {
+    const body = await readBody(req);
+    const b = body as { infoHash?: unknown; ownerKeyHash?: unknown; meta?: unknown };
+    if (!isInfoHash(b?.infoHash) || typeof b?.ownerKeyHash !== "string") {
+      return new Response("bad request", { status: 400, headers: cors });
+    }
+    const ih = b.infoHash.toLowerCase();
+    // First writer wins: do not let a later caller overwrite an existing owner key.
+    const existing = await kv.get(["site", ih]);
+    if (!existing.value) {
+      await kv.set(
+        ["site", ih],
+        { at: Date.now(), ownerKeyHash: b.ownerKeyHash.slice(0, 64), meta: b.meta ?? null },
+        { expireIn: TTL_MS },
+      );
+    }
+    return new Response(null, { status: 204, headers: cors });
+  }
+
+  if (path === "/_site" && req.method === "GET") {
+    return await siteLog(req);
+  }
+
   if (path === "/_admin" && req.method === "GET") {
     return await admin(req);
   }
 
   return null;
+}
+
+// Owner-scoped activity log: every viewer loads the bootstrap from us, so these are the
+// real "requests for your share". Gated by the owner key minted at seed time — the infohash
+// alone is public (it is the share URL), so it must not be enough to read the log.
+async function siteLog(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const hash = (url.searchParams.get("hash") ?? "").toLowerCase();
+  const key = url.searchParams.get("key") ?? "";
+  if (!isInfoHash(hash) || !key) return new Response("bad request", { status: 400 });
+
+  const site = await kv.get<{ ownerKeyHash: string; meta: unknown; at: number }>(["site", hash]);
+  if (!site.value) return new Response("Unknown site", { status: 404 });
+  if (!timingSafeEqual(await sha256Hex(key), site.value.ownerKeyHash)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const events: Stored[] = [];
+  for await (
+    const entry of kv.list<Stored>({ prefix: ["site-ev", hash] }, { limit: MAX_LIST })
+  ) {
+    events.push(entry.value);
+    if (events.length >= 500) break;
+  }
+
+  if (url.searchParams.get("format") === "json") {
+    return new Response(JSON.stringify({ hash, count: events.length, events }, null, 2), {
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+  return new Response(siteHtml(hash, events), {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -188,6 +264,62 @@ async function admin(req: Request): Promise<Response> {
 
 function esc(s: unknown): string {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function siteHtml(hash: string, events: Stored[]): string {
+  // Views = someone opened the share link. Count distinct coarse IP prefixes as a rough
+  // "visitors" number without ever showing a full address.
+  const views = events.filter((e) => (e.data as { event?: string })?.event === "view-start");
+  const rendered = events.filter((e) => (e.data as { event?: string })?.event === "view-rendered");
+  const noPeers = events.filter((e) => (e.data as { event?: string })?.event === "view-no-peers");
+  const visitors = new Set(views.map((e) => e.ipPrefix).filter(Boolean)).size;
+
+  const rows = events.map((e) => {
+    const d = e.data as { event?: string; totalMs?: number; waitMs?: number };
+    const when = new Date(e.at).toISOString().replace("T", " ").slice(0, 19);
+    const detail = d.totalMs != null
+      ? `${d.totalMs} ms`
+      : d.waitMs != null
+      ? `waited ${d.waitMs} ms`
+      : "";
+    return `<tr><td class="mono">${when}</td><td><span class="tag">${
+      esc(d.event ?? e.kind)
+    }</span></td><td class="mono">${esc(e.ipPrefix || "—")}</td><td class="small">${
+      esc((e.ua.match(/(Chrome|Firefox|Safari|Edg)\/[\d.]+/) ?? [e.ua.slice(0, 24)])[0])
+    }</td><td class="mono small">${esc(detail)}</td></tr>`;
+  }).join("\n");
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>activity · ${hash.slice(0, 8)}…</title>
+<style>
+  body{font:14px/1.5 system-ui,sans-serif;margin:0;background:#0f1115;color:#e6e9ef}
+  header{padding:1.25rem;border-bottom:1px solid #262b33}
+  h1{font-size:1.05rem;margin:0 0 .25rem} .sub{color:#9aa4b2;font-size:.85rem;margin:0}
+  .stats{display:flex;gap:1.5rem;margin-top:1rem;flex-wrap:wrap}
+  .stat b{display:block;font-size:1.5rem;color:#6ea8fe} .stat span{color:#9aa4b2;font-size:.8rem}
+  table{border-collapse:collapse;width:100%} td{border-bottom:1px solid #1b2027;padding:.4rem .75rem}
+  .mono{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+  .small{color:#9aa4b2;font-size:.8rem}
+  .tag{font-size:.75rem;padding:.1rem .4rem;border-radius:5px;background:#17303c;color:#89dbff}
+  .empty{padding:3rem 1.25rem;color:#9aa4b2}
+</style></head><body>
+<header>
+  <h1>activity for your share</h1>
+  <p class="sub mono">${esc(hash)}</p>
+  <div class="stats">
+    <div class="stat"><b>${visitors}</b><span>visitors (by /16)</span></div>
+    <div class="stat"><b>${views.length}</b><span>opens</span></div>
+    <div class="stat"><b>${rendered.length}</b><span>loaded ok</span></div>
+    <div class="stat"><b>${noPeers.length}</b><span>found no peers</span></div>
+  </div>
+</header>
+${
+    events.length
+      ? `<table><tbody>${rows}</tbody></table>`
+      : `<p class="empty">No requests yet. When someone opens your share link, it shows up here.</p>`
+  }
+</body></html>`;
 }
 
 function adminHtml(events: Stored[]): string {

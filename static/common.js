@@ -81,6 +81,19 @@ export function findEntryFile(torrent) {
   return pool.sort((a, b) => depth(a) - depth(b))[0];
 }
 
+/** A strong random hex key, used as a per-site owner secret. */
+export function randomKey() {
+  const a = new Uint8Array(16);
+  crypto.getRandomValues(a);
+  return [...a].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** SHA-256 of a string as lowercase hex. Matches the server's sha256Hex. */
+export async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 export function formatBytes(n) {
   if (!n) return "0 B";
   const u = ["B", "kB", "MB", "GB"];
