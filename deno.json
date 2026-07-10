@@ -1,8 +1,8 @@
 {
   "tasks": {
-    "dev": "deno run --allow-net --allow-read --allow-env server.ts",
-    "start": "deno run --allow-net --allow-read --allow-env server.ts",
-    "check": "deno check server.ts",
+    "dev": "deno run --unstable-kv --allow-net --allow-read --allow-env server.ts",
+    "start": "deno run --unstable-kv --allow-net --allow-read --allow-env server.ts",
+    "check": "deno check server.ts telemetry.ts",
     "fmt": "deno fmt"
   },
   "fmt": {
@@ -17,5 +17,3 @@
     "app": "webtorrent-drop"
   }
 }
-
-

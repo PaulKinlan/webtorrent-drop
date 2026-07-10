@@ -38,6 +38,8 @@
 
     <iframe id="frame" class="frame" hidden title="Site loaded from the swarm"></iframe>
 
+    <!-- Telemetry first and standalone, so it still reports even if viewer.js fails to parse. -->
+    <script type="module" src="/telemetry.js"></script>
     <script src="/vendor/webtorrent.min.js"></script>
     <script type="module" src="/viewer.js"></script>
   </body>

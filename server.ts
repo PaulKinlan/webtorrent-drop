@@ -15,7 +15,14 @@
 //
 //   deno task dev     # http://localhost:8000
 
+import { handleTelemetry } from "./telemetry.ts";
+
 const PORT = Number(Deno.env.get("PORT") ?? 8000);
+
+// Point browsers' Reporting API at our own endpoint. A `default` endpoint automatically
+// receives deprecation, intervention, and crash reports. Our app also POSTs custom events
+// to /_beacon. Both land in Deno KV; inspect at /_admin (token-gated).
+const REPORTING = { "reporting-endpoints": 'default="/_report"' };
 
 /** A v1 infohash is 40 hex chars; a base32 one is 32 chars. Both are legal DNS labels. */
 const HEX40 = /^[0-9a-f]{40}$/i;
@@ -62,13 +69,17 @@ Deno.serve({ port: PORT }, async (req) => {
   const path = url.pathname;
   const hostHash = infoHashFromHost(req.headers.get("host") ?? url.hostname);
 
+  // Telemetry endpoints (/_beacon, /_report, /_admin) come first.
+  const tele = await handleTelemetry(req, path);
+  if (tele) return tele;
+
   // The WebTorrent service worker must be served from the origin root so its scope
   // covers /webtorrent/*. Service-Worker-Allowed lets it claim the root scope.
   if (path === "/sw.js") {
     return staticFile("vendor/sw.min.js", { "service-worker-allowed": "/" });
   }
 
-  const ASSETS = ["/styles.css", "/app.js", "/viewer.js", "/common.js"];
+  const ASSETS = ["/styles.css", "/app.js", "/viewer.js", "/common.js", "/telemetry.js"];
   if (path.startsWith("/vendor/") || ASSETS.includes(path)) {
     return staticFile(path.slice(1));
   }
@@ -86,15 +97,15 @@ Deno.serve({ port: PORT }, async (req) => {
 
   // Subdomain mode: <infohash>.domain serves the viewer for that hash.
   if (hostHash) {
-    if (path === "/" || path === "/index.html") return staticFile("viewer.html");
+    if (path === "/" || path === "/index.html") return staticFile("viewer.html", REPORTING);
     return new Response("Not found", { status: 404 });
   }
 
   // Path mode (stopgap): /<infohash> serves the viewer.
   const first = path.slice(1).split("/")[0];
-  if (first && isInfoHash(first)) return staticFile("viewer.html");
+  if (first && isInfoHash(first)) return staticFile("viewer.html", REPORTING);
 
-  if (path === "/" || path === "/index.html") return staticFile("index.html");
+  if (path === "/" || path === "/index.html") return staticFile("index.html", REPORTING);
 
   return new Response("Not found", { status: 404 });
 });

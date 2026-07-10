@@ -1,5 +1,6 @@
 // The drop page: turn a dropped folder into a torrent and seed it from this tab.
 import { formatBytes, LOG, shareUrl, TRACKERS } from "/common.js";
+import { track } from "/telemetry.js";
 
 const dropEl = document.getElementById("drop");
 const dirEl = document.getElementById("dir");
@@ -24,6 +25,7 @@ function fail(msg) {
   errorEl.textContent = msg;
   errorEl.hidden = false;
   statusEl.hidden = true;
+  track("drop-fail", { msg: String(msg).slice(0, 200) });
 }
 
 // Construct WebTorrent lazily and guarded. Building it at module top meant that if the
@@ -156,6 +158,8 @@ function seed(files) {
 
   const total = files.reduce((n, f) => n + f.size, 0);
   console.log(LOG, `seeding ${files.length} files, ${formatBytes(total)}`);
+  track("seed-start", { files: files.length, bytes: total, generated });
+  const seedT0 = performance.now();
 
   statusEl.hidden = false;
   stateEl.textContent = "Hashing…";
@@ -184,6 +188,14 @@ function seed(files) {
 
   wt.seed(files, { name, announce: TRACKERS }, (torrent) => {
     console.log(LOG, "seeding", torrent.infoHash, torrent.magnetURI);
+    track("seed-ready", {
+      infoHash: torrent.infoHash,
+      files: files.length,
+      bytes: total,
+      generated,
+      hashMs: Math.round(performance.now() - seedT0),
+    });
+    let firstPeer = false;
     const url = shareUrl(torrent.infoHash);
     urlEl.value = url;
     openEl.href = url;
@@ -199,6 +211,13 @@ function seed(files) {
     torrent.on("upload", tick);
     torrent.on("wire", () => {
       console.log(LOG, "peer connected, now", torrent.numPeers);
+      if (!firstPeer) {
+        firstPeer = true;
+        track("seed-first-peer", {
+          infoHash: torrent.infoHash,
+          waitMs: Math.round(performance.now() - seedT0),
+        });
+      }
       tick();
     });
     setInterval(tick, 2000);

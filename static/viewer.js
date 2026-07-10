@@ -11,6 +11,7 @@ import {
   readyServiceWorker,
   TRACKERS,
 } from "/common.js";
+import { track } from "/telemetry.js";
 
 const stateEl = document.getElementById("state");
 const statsEl = document.getElementById("stats");
@@ -20,18 +21,22 @@ const errorEl = document.getElementById("error");
 const overlayEl = document.getElementById("overlay");
 const frameEl = document.getElementById("frame");
 
+const viewT0 = performance.now();
+
 function fail(msg) {
   console.error(LOG, "error:", msg);
   stateEl.textContent = "Could not load this site";
   errorEl.textContent = msg;
   errorEl.hidden = false;
   barEl.style.width = "0%";
+  track("view-fail", { infoHash, msg: String(msg).slice(0, 200) });
 }
 
 const infoHash = currentInfoHash();
 if (!infoHash) {
   fail("No torrent infohash in this URL.");
 } else {
+  track("view-start", { infoHash });
   main(infoHash).catch((err) => fail(err.message || String(err)));
 }
 
@@ -48,23 +53,38 @@ async function main(hash) {
   client.createServer({ controller });
   console.log(LOG, "webtorrent server created");
 
-  // If nobody is seeding, add() simply never fires metadata. Say so rather than hang.
+  // If nobody is seeding, add() simply never fires metadata. Say so rather than hang, and
+  // record it: "no peers" is the single most important failure to be able to see later.
+  let gotMeta = false;
   const noPeers = setTimeout(() => {
     if (!errorEl.hidden) return;
     hintEl.textContent =
       "Still looking. If the person who made this site closed their tab, it is gone for good.";
+    if (!gotMeta) track("view-no-peers", { infoHash, waitMs: 12000, peers: torrent.numPeers });
   }, 12000);
 
   const torrent = client.add(hash, { announce: TRACKERS });
 
+  let firstWire = false;
   torrent.on("wire", () => {
     console.log(LOG, "peer connected, now", torrent.numPeers);
     statsEl.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"}`;
+    if (!firstWire) {
+      firstWire = true;
+      track("view-first-peer", { infoHash, waitMs: Math.round(performance.now() - viewT0) });
+    }
   });
 
   torrent.on("metadata", () => {
     console.log(LOG, "got metadata:", torrent.name, torrent.files.length, "files");
+    gotMeta = true;
     clearTimeout(noPeers);
+    track("view-metadata", {
+      infoHash,
+      files: torrent.files.length,
+      bytes: torrent.length,
+      waitMs: Math.round(performance.now() - viewT0),
+    });
     stateEl.textContent = `Fetching ${torrent.name}…`;
   });
 
@@ -93,6 +113,11 @@ async function main(hash) {
       overlayEl.hidden = true;
       frameEl.hidden = false;
       document.title = torrent.name;
+      track("view-rendered", {
+        infoHash,
+        entry: entry.name,
+        totalMs: Math.round(performance.now() - viewT0),
+      });
       console.log(LOG, "rendered; now seeding to others while this tab is open");
     }, { once: true });
     frameEl.src = src;
