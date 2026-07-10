@@ -2,8 +2,12 @@
 import { formatBytes, LOG, shareUrl, TRACKERS } from "/common.js";
 
 const dropEl = document.getElementById("drop");
-const fileEl = document.getElementById("file");
-const pickEl = document.getElementById("pick");
+const dirEl = document.getElementById("dir");
+// NB: id must not be "files" — the <ul> listing the seeded files already owns that id.
+const filesInputEl = document.getElementById("filePick");
+const pickDirEl = document.getElementById("pickDir");
+const touchNoteEl = document.getElementById("touchNote");
+const dropTitleEl = document.getElementById("dropTitle");
 const statusEl = document.getElementById("status");
 const stateEl = document.getElementById("state");
 const statsEl = document.getElementById("stats");
@@ -113,8 +117,7 @@ function seed(files) {
     stateEl.textContent = "Seeding";
 
     const tick = () => {
-      statsEl.textContent =
-        `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"} · ` +
+      statsEl.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"} · ` +
         `${formatBytes(torrent.uploaded)} sent · ${formatBytes(torrent.length)} total`;
     };
     tick();
@@ -151,21 +154,31 @@ dropEl.addEventListener("drop", async (e) => {
   }
 });
 
-const openPicker = () => fileEl.click();
-pickEl.addEventListener("click", openPicker);
+// Directory pickers do not exist on Android or iOS: `webkitdirectory` is desktop-only, so
+// that control would simply do nothing there. Detect a touch device and hide it rather than
+// leave a dead button, steering to the files picker instead.
+const isTouch = matchMedia("(pointer: coarse)").matches;
+if (isTouch) {
+  pickDirEl.hidden = true;
+  touchNoteEl.hidden = false;
+  dropTitleEl.textContent = "Pick the files for your site";
+  console.log(LOG, "touch device: no folder picker, offering files instead");
+}
+
+// Clicking the zone opens the folder picker on desktop, but never swallow clicks that are
+// already headed for a real <label>, or we would open and immediately re-open the dialog.
 dropEl.addEventListener("click", (e) => {
-  if (e.target !== pickEl) openPicker();
+  if (isTouch || e.target.closest("label, input")) return;
+  dirEl.click();
 });
-dropEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    openPicker();
-  }
-});
-fileEl.addEventListener("change", () => {
-  errorEl.hidden = true;
-  seed(filesFromInput(fileEl.files));
-});
+
+for (const input of [dirEl, filesInputEl]) {
+  input.addEventListener("change", () => {
+    if (!input.files.length) return;
+    errorEl.hidden = true;
+    seed(filesFromInput(input.files));
+  });
+}
 
 copyEl.addEventListener("click", async () => {
   await navigator.clipboard.writeText(urlEl.value);

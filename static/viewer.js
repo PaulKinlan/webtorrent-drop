@@ -3,7 +3,14 @@
 // The WebTorrent service worker answers /webtorrent/* by messaging a *window client* of
 // this origin that holds a running WebTorrent server. That client is this page. So this
 // page must stay alive: we render the site in an iframe rather than navigating to it.
-import { currentInfoHash, findEntryFile, formatBytes, LOG, readyServiceWorker, TRACKERS } from "/common.js";
+import {
+  currentInfoHash,
+  findEntryFile,
+  formatBytes,
+  LOG,
+  readyServiceWorker,
+  TRACKERS,
+} from "/common.js";
 
 const stateEl = document.getElementById("state");
 const statsEl = document.getElementById("stats");
@@ -78,9 +85,7 @@ async function main(hash) {
     // /webtorrent/<infoHash>/<encoded file path>. Prefer it over hand-building the path.
     // Using the file's real path means relative links and assets inside the page resolve.
     const src = entry.streamURL ??
-      `/webtorrent/${torrent.infoHash}/${
-        entry.path.split("/").map(encodeURIComponent).join("/")
-      }`;
+      `/webtorrent/${torrent.infoHash}/${entry.path.split("/").map(encodeURIComponent).join("/")}`;
     console.log(LOG, "entry:", entry.path, "->", src);
 
     stateEl.textContent = "Rendering…";

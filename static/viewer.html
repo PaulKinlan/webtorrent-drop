@@ -1,33 +1,44 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>loading a site from the swarm…</title>
-  <link rel="stylesheet" href="/styles.css">
-</head>
-<body class="viewer">
-<div id="overlay" class="overlay">
-  <div class="overlay__box">
-    <svg class="overlay__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"/><circle cx="4" cy="6" r="2"/><circle cx="20" cy="6" r="2"/>
-      <circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/>
-      <path d="M6 7 10 10M18 7l-4 3M6 17l4-3M18 17l-4-3"/>
-    </svg>
-    <p class="overlay__state" id="state">Connecting to the swarm…</p>
-    <div class="bar"><div class="bar__fill" id="bar"></div></div>
-    <p class="overlay__stats muted" id="stats">Looking for peers</p>
-    <p class="overlay__hint muted" id="hint">
-      This site is served peer-to-peer. It only exists while someone is seeding it.
-    </p>
-    <p class="error" id="error" hidden></p>
-  </div>
-</div>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>loading a site from the swarm…</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="viewer">
+    <div id="overlay" class="overlay">
+      <div class="overlay__box">
+        <svg
+          class="overlay__icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="3" />
+          <circle cx="4" cy="6" r="2" />
+          <circle cx="20" cy="6" r="2" />
+          <circle cx="4" cy="18" r="2" />
+          <circle cx="20" cy="18" r="2" />
+          <path d="M6 7 10 10M18 7l-4 3M6 17l4-3M18 17l-4-3" />
+        </svg>
+        <p class="overlay__state" id="state">Connecting to the swarm…</p>
+        <div class="bar"><div class="bar__fill" id="bar"></div></div>
+        <p class="overlay__stats muted" id="stats">Looking for peers</p>
+        <p class="overlay__hint muted" id="hint">
+          This site is served peer-to-peer. It only exists while someone is seeding it.
+        </p>
+        <p class="error" id="error" hidden></p>
+      </div>
+    </div>
 
-<iframe id="frame" class="frame" hidden title="Site loaded from the swarm"></iframe>
+    <iframe id="frame" class="frame" hidden title="Site loaded from the swarm"></iframe>
 
-<script src="/vendor/webtorrent.min.js"></script>
-<script type="module" src="/viewer.js"></script>
-</body>
+    <script src="/vendor/webtorrent.min.js"></script>
+    <script type="module" src="/viewer.js"></script>
+  </body>
 </html>
