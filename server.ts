@@ -64,8 +64,9 @@ async function staticFile(name: string, extraHeaders: HeadersInit = {}): Promise
     return new Response(body, {
       headers: {
         "content-type": MIME[ext] ?? "application/octet-stream",
-        // The app is tiny and changes rarely; the vendored bundle is versioned by content.
-        "cache-control": name.startsWith("vendor/") ? "public, max-age=86400" : "no-cache",
+        // no-cache (revalidate every load) while the prototype iterates, so a fixed bundle
+        // or script actually reaches browsers instead of a stale 24h-cached copy.
+        "cache-control": "no-cache",
         ...extraHeaders,
       },
     });
