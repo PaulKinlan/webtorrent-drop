@@ -64,13 +64,13 @@ async function staticFile(name: string, extraHeaders: HeadersInit = {}): Promise
   }
 }
 
-Deno.serve({ port: PORT }, async (req) => {
+Deno.serve({ port: PORT }, async (req, info) => {
   const url = new URL(req.url);
   const path = url.pathname;
   const hostHash = infoHashFromHost(req.headers.get("host") ?? url.hostname);
 
   // Telemetry endpoints (/_beacon, /_report, /_admin) come first.
-  const tele = await handleTelemetry(req, path);
+  const tele = await handleTelemetry(req, path, info);
   if (tele) return tele;
 
   // The WebTorrent service worker must be served from the origin root so its scope

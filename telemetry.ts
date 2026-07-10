@@ -22,7 +22,10 @@ const MAX_LIST = 1000;
 /** Truncate an IP so a log of "who loaded what" is coarse: IPv4 -> /16, IPv6 -> /48. */
 export function truncateIp(raw: string | null): string {
   if (!raw) return "";
-  const ip = raw.split(",")[0].trim();
+  let ip = raw.split(",")[0].trim();
+  // Deno Deploy's remoteAddr reports IPv4 clients as IPv4-mapped IPv6 (::ffff:a.b.c.d).
+  const mapped = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (mapped) ip = mapped[1];
   if (ip.includes(":")) {
     // IPv6: keep the first 3 hextets (/48), zero the rest.
     const parts = ip.split(":");
@@ -33,12 +36,15 @@ export function truncateIp(raw: string | null): string {
   return "";
 }
 
-function clientIp(req: Request): string {
-  return truncateIp(
-    req.headers.get("x-forwarded-for") ??
-      req.headers.get("x-real-ip") ??
-      null,
-  );
+// The new Deno Deploy platform does not forward a client IP header (no x-forwarded-for),
+// so the connection's remoteAddr is the source of truth; headers are a fallback for other
+// hosts / local dev.
+function clientIp(req: Request, info?: Deno.ServeHandlerInfo): string {
+  const fromHeader = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip");
+  const fromConn = info?.remoteAddr && "hostname" in info.remoteAddr
+    ? info.remoteAddr.hostname
+    : null;
+  return truncateIp(fromHeader ?? fromConn ?? null);
 }
 
 type Stored = {
@@ -52,12 +58,19 @@ type Stored = {
   data: unknown;
 };
 
-async function store(kind: Stored["kind"], data: unknown, req: Request, at: number, id: string) {
+async function store(
+  kind: Stored["kind"],
+  data: unknown,
+  req: Request,
+  at: number,
+  id: string,
+  info?: Deno.ServeHandlerInfo,
+) {
   const rec: Stored = {
     id,
     at,
     kind,
-    ipPrefix: clientIp(req),
+    ipPrefix: clientIp(req, info),
     ua: (req.headers.get("user-agent") ?? "").slice(0, 300),
     host: req.headers.get("host") ?? "",
     // Referer without its query string, so we never store secrets that rode along in a URL.
@@ -82,7 +95,11 @@ async function readBody(req: Request): Promise<unknown | null> {
 }
 
 /** Handle the telemetry routes. Returns null for paths this module does not own. */
-export async function handleTelemetry(req: Request, path: string): Promise<Response | null> {
+export async function handleTelemetry(
+  req: Request,
+  path: string,
+  info?: Deno.ServeHandlerInfo,
+): Promise<Response | null> {
   const cors = {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "POST, OPTIONS",
@@ -99,7 +116,7 @@ export async function handleTelemetry(req: Request, path: string): Promise<Respo
     const now = Date.now();
     const events = Array.isArray(body) ? body : [body];
     for (const ev of events.slice(0, 50)) {
-      await store("beacon", ev, req, now, crypto.randomUUID());
+      await store("beacon", ev, req, now, crypto.randomUUID(), info);
     }
     // sendBeacon ignores the response, but be well-behaved for fetch callers.
     return new Response(null, { status: 204, headers: cors });
@@ -112,7 +129,7 @@ export async function handleTelemetry(req: Request, path: string): Promise<Respo
     // The Reporting API posts an array of report objects.
     const reports = Array.isArray(body) ? body : [body];
     for (const r of reports.slice(0, 50)) {
-      await store("report", r, req, now, crypto.randomUUID());
+      await store("report", r, req, now, crypto.randomUUID(), info);
     }
     return new Response(null, { status: 204, headers: cors });
   }

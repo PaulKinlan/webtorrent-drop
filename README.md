@@ -99,3 +99,20 @@ static/vendor/       webtorrent.min.js + sw.min.js (must be same-origin)
 ```
 
 MIT.
+
+## Telemetry
+
+Client observability, so we can see what real browsers do and fix it later.
+
+- `static/telemetry.js` batches uncaught errors, unhandled rejections, and named lifecycle and
+  timing events (`seed-start/ready/first-peer`, `view-start/metadata/no-peers/rendered/
+  fail`) and
+  flushes them with `navigator.sendBeacon`.
+- The server also sets a `Reporting-Endpoints` header, so the browser's Reporting API posts
+  deprecation, intervention, and crash reports to `/_report` on its own.
+- Both land in Deno KV with a 14-day TTL. Client IPs are truncated to `/16` (v4) or `/48` (v6) at
+  the edge, from the connection's `remoteAddr` (Deno Deploy's new platform sends no
+  `x-forwarded-for`, and reports IPv4 as `::ffff:a.b.c.d`). We store diagnostic shape, never file
+  names or page content, and strip the referer query string.
+- Inspect at `GET /_admin`, gated by the `REPORT_ADMIN_TOKEN` env var. Add `&format=json` for raw
+  data, `&kind=beacon` or `&kind=report` to filter.
