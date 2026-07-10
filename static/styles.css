@@ -225,6 +225,11 @@ code {
   font-size: 0.85rem;
   margin: 1rem 0 0;
 }
+/* An author `display` value beats the `hidden` attribute's UA `display:none`, so restore it
+   explicitly or a hidden .error/.warn would still occupy layout as an empty box. */
+.warn[hidden], .error[hidden] {
+  display: none;
+}
 .warn {
   color: var(--warn);
 }
