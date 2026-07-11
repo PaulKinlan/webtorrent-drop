@@ -40,21 +40,49 @@ function fail(msg) {
 track("shell-start", { infoHash: hash, path: location.pathname });
 main().catch((e) => fail(e.message || String(e)));
 
+/** Resolve once the SW controls this page (or after a timeout), so a reload is intercepted. */
+function untilControlled(ms) {
+  return new Promise((res) => {
+    if (navigator.serviceWorker.controller) return res();
+    const t = setTimeout(res, ms);
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      clearTimeout(t);
+      res();
+    }, { once: true });
+  });
+}
+
 async function main() {
   if (!("serviceWorker" in navigator)) throw new Error("No service worker support.");
   if (!isSecureContext) throw new Error("Needs a secure context (https).");
 
+  // Loop guard. The shell reloads once the site is cached so the SW can serve it. If the SW
+  // ISN'T serving it (stale worker, or not yet controlling this page), the shell would load
+  // again, see the cache, and reload forever — hammering the origin. Count consecutive shell
+  // loads and bail instead of looping.
+  const shellLoads = Number(sessionStorage.getItem("wtd-shell-loads") || "0") + 1;
+  sessionStorage.setItem("wtd-shell-loads", String(shellLoads));
+
   await navigator.serviceWorker.register("/sw.js", { scope: "/" });
   await navigator.serviceWorker.ready;
-  console.log(LOG, "service worker ready");
+  console.log(LOG, "service worker ready; shell load", shellLoads);
 
-  // If the site is already cached (e.g. the SW wasn't controlling this first paint), just
-  // reload so the SW serves it.
   const cache = await caches.open(siteCacheName(hash));
   if (await cache.match("/index.html")) {
-    console.log(LOG, "already cached — reloading to serve from SW");
+    if (shellLoads > 2) {
+      sessionStorage.removeItem("wtd-shell-loads");
+      return fail(
+        "The site is saved but the service worker isn't serving it. Clear this site's data " +
+          "(DevTools → Application → Clear storage) and reload.",
+      );
+    }
+    console.log(LOG, "already cached — waiting for SW control, then reloading once");
+    await untilControlled(3000);
     return location.reload();
   }
+
+  // Fresh download path: reset the loop guard.
+  sessionStorage.removeItem("wtd-shell-loads");
 
   const client = new WebTorrent();
   client.on("error", (e) => fail(e.message || String(e)));
