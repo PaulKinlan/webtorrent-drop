@@ -102,7 +102,8 @@ async function serve(req, url, h) {
 // (a main-thread WebTorrent client seeding from the cache — the SW itself can't, no WebRTC).
 async function injectReseed(res) {
   let html = await res.text();
-  const tag = `\n<script src="/reseed.js" data-wtd-reseed></script>\n`;
+  // Must be type="module" — reseed.js uses ES module imports (WebTorrent is an ES module).
+  const tag = `\n<script type="module" src="/reseed.js" data-wtd-reseed></script>\n`;
   if (!html.includes("data-wtd-reseed")) {
     html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, tag + "</body>") : html + tag;
   }
