@@ -89,6 +89,11 @@ Deno.serve({ port: PORT }, async (req, info) => {
     return staticFile("sw.js", { "service-worker-allowed": "/" });
   }
 
+  // Browsers request /favicon.ico by default; point them at our SVG icon.
+  if (path === "/favicon.ico") {
+    return Response.redirect(new URL("/favicon.svg", url), 301);
+  }
+
   // App assets, always served from the origin (the SW never intercepts these).
   const ASSETS = [
     "/styles.css",
@@ -97,6 +102,7 @@ Deno.serve({ port: PORT }, async (req, info) => {
     "/reseed.js",
     "/common.js",
     "/telemetry.js",
+    "/favicon.svg",
   ];
   if (path.startsWith("/vendor/") || ASSETS.includes(path)) {
     return staticFile(path.slice(1));
