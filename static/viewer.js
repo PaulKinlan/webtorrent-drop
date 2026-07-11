@@ -1,128 +1,154 @@
-// The viewer: join the swarm for this page's infohash and render the site from it.
+// The shell / bootstrap. Served by the origin for any not-yet-cached path on a site's
+// subdomain. It:
+//   1. registers our service worker,
+//   2. downloads the whole torrent over WebTorrent (on the main thread — WebRTC),
+//   3. writes every file into the Cache API at its REAL path (common folder stripped) with a
+//      correct content-type, plus a manifest for reseeding,
+//   4. reloads — after which the SW serves the site natively at real URLs.
 //
-// The WebTorrent service worker answers /webtorrent/* by messaging a *window client* of
-// this origin that holds a running WebTorrent server. That client is this page. So this
-// page must stay alive: we render the site in an iframe rather than navigating to it.
-// WebTorrent's vendored bundle is an ES module (default export); import it, don't rely on a
-// global from a classic <script> (which throws "Unexpected token 'export'").
+// WebTorrent's on-demand streaming still exists; we choose full-download-then-cache here so
+// that afterwards the whole site is navigable offline from cache with real URLs.
 import WebTorrent from "/vendor/webtorrent.v2.min.js";
 import {
-  currentInfoHash,
-  findEntryFile,
-  formatBytes,
-  LOG,
-  readyServiceWorker,
+  commonRoot,
+  generateIndexHtml,
+  mimeFor,
+  relPath,
+  siteCacheName,
   TRACKERS,
 } from "/common.js";
 import { track } from "/telemetry.js";
 
+const LOG = "[wt-shell]";
 const stateEl = document.getElementById("state");
 const statsEl = document.getElementById("stats");
 const hintEl = document.getElementById("hint");
 const barEl = document.getElementById("bar");
 const errorEl = document.getElementById("error");
-const overlayEl = document.getElementById("overlay");
-const frameEl = document.getElementById("frame");
 
-const viewT0 = performance.now();
+const hash = location.hostname.split(".")[0].toLowerCase();
+const t0 = performance.now();
 
 function fail(msg) {
   console.error(LOG, "error:", msg);
   stateEl.textContent = "Could not load this site";
   errorEl.textContent = msg;
   errorEl.hidden = false;
-  barEl.style.width = "0%";
-  track("view-fail", { infoHash, msg: String(msg).slice(0, 200) });
+  track("shell-fail", { infoHash: hash, msg: String(msg).slice(0, 200) });
 }
 
-const infoHash = currentInfoHash();
-if (!infoHash) {
-  fail("No torrent infohash in this URL.");
-} else {
-  track("view-start", { infoHash });
-  main(infoHash).catch((err) => fail(err.message || String(err)));
-}
+track("shell-start", { infoHash: hash, path: location.pathname });
+main().catch((e) => fail(e.message || String(e)));
 
-async function main(hash) {
-  console.log(LOG, "viewing", hash);
-  document.title = `${hash.slice(0, 8)}… · webtorrent-drop`;
+async function main() {
+  if (!("serviceWorker" in navigator)) throw new Error("No service worker support.");
+  if (!isSecureContext) throw new Error("Needs a secure context (https).");
 
-  const controller = await readyServiceWorker();
+  await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  await navigator.serviceWorker.ready;
+  console.log(LOG, "service worker ready");
+
+  // If the site is already cached (e.g. the SW wasn't controlling this first paint), just
+  // reload so the SW serves it.
+  const cache = await caches.open(siteCacheName(hash));
+  if (await cache.match("/index.html")) {
+    console.log(LOG, "already cached — reloading to serve from SW");
+    return location.reload();
+  }
 
   const client = new WebTorrent();
-  client.on("error", (err) => fail(err.message || String(err)));
+  client.on("error", (e) => fail(e.message || String(e)));
 
-  // Stand up the in-page HTTP server the service worker proxies to.
-  client.createServer({ controller });
-  console.log(LOG, "webtorrent server created");
-
-  // If nobody is seeding, add() simply never fires metadata. Say so rather than hang, and
-  // record it: "no peers" is the single most important failure to be able to see later.
-  let gotMeta = false;
   const noPeers = setTimeout(() => {
-    if (!errorEl.hidden) return;
-    hintEl.textContent =
-      "Still looking. If the person who made this site closed their tab, it is gone for good.";
-    if (!gotMeta) track("view-no-peers", { infoHash, waitMs: 12000, peers: torrent.numPeers });
+    if (errorEl.hidden) {
+      hintEl.textContent =
+        "Still looking for peers. If whoever made this site closed their tab, it may be gone.";
+    }
   }, 12000);
 
   const torrent = client.add(hash, { announce: TRACKERS });
 
-  let firstWire = false;
   torrent.on("wire", () => {
-    console.log(LOG, "peer connected, now", torrent.numPeers);
     statsEl.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"}`;
-    if (!firstWire) {
-      firstWire = true;
-      track("view-first-peer", { infoHash, waitMs: Math.round(performance.now() - viewT0) });
-    }
   });
-
   torrent.on("metadata", () => {
-    console.log(LOG, "got metadata:", torrent.name, torrent.files.length, "files");
-    gotMeta = true;
     clearTimeout(noPeers);
-    track("view-metadata", {
-      infoHash,
+    track("shell-metadata", {
+      infoHash: hash,
       files: torrent.files.length,
       bytes: torrent.length,
-      waitMs: Math.round(performance.now() - viewT0),
+      waitMs: Math.round(performance.now() - t0),
     });
-    stateEl.textContent = `Fetching ${torrent.name}…`;
+    stateEl.textContent = `Downloading ${torrent.name}…`;
   });
-
   torrent.on("download", () => {
     const pct = Math.round(torrent.progress * 100);
     barEl.style.width = `${pct}%`;
-    statsEl.textContent =
-      `${pct}% · ${formatBytes(torrent.downloaded)} of ${formatBytes(torrent.length)} · ` +
+    statsEl.textContent = `${pct}% · ${fmt(torrent.downloaded)} of ${fmt(torrent.length)} · ` +
       `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"}`;
   });
 
-  torrent.on("ready", () => {
-    const entry = findEntryFile(torrent);
-    if (!entry) {
-      return fail("This torrent has no index.html, so there is no page to show.");
+  torrent.on("done", async () => {
+    clearTimeout(noPeers);
+    console.log(LOG, "download complete — caching", torrent.files.length, "files");
+    stateEl.textContent = "Saving…";
+    barEl.style.width = "100%";
+    try {
+      await cacheAll(cache, torrent);
+    } catch (e) {
+      return fail("Could not store the site: " + (e.message || e));
     }
-    // WebTorrent exposes the exact URL its in-page server answers on, of the shape
-    // /webtorrent/<infoHash>/<encoded file path>. Prefer it over hand-building the path.
-    // Using the file's real path means relative links and assets inside the page resolve.
-    const src = entry.streamURL ??
-      `/webtorrent/${torrent.infoHash}/${entry.path.split("/").map(encodeURIComponent).join("/")}`;
-    console.log(LOG, "entry:", entry.path, "->", src);
-
-    stateEl.textContent = "Rendering…";
-    frameEl.addEventListener("load", () => {
-      overlayEl.hidden = true;
-      frameEl.hidden = false;
-      document.title = torrent.name;
-      track("view-rendered", {
-        infoHash,
-        entry: entry.name,
-        totalMs: Math.round(performance.now() - viewT0),
-      });
-      console.log(LOG, "rendered; now seeding to others while this tab is open");
-    }, { once: true });
-    frameEl.src = src;
+    track("shell-cached", {
+      infoHash: hash,
+      files: torrent.files.length,
+      bytes: torrent.length,
+      totalMs: Math.round(performance.now() - t0),
+    });
+    console.log(LOG, "cached; reloading to serve from SW at real URLs");
+    location.reload();
   });
+}
+
+// Write each file into the Cache at its real, root-relative path with the right content-type.
+// Also store a manifest of the ORIGINAL files (not any generated index) so reseeding can
+// reproduce the exact torrent / infohash.
+async function cacheAll(cache, torrent) {
+  const files = torrent.files;
+  const root = commonRoot(files);
+  const manifest = { infoHash: torrent.infoHash, name: torrent.name, root, files: [] };
+  let hasIndex = false;
+
+  for (const f of files) {
+    const rel = relPath(f.path, root);
+    if (rel.toLowerCase() === "index.html") hasIndex = true;
+    const blob = await f.blob();
+    await cache.put(
+      "/" + rel.split("/").map(encodeURIComponent).join("/"),
+      new Response(blob, {
+        headers: { "content-type": mimeFor(rel), "cache-control": "no-store" },
+      }),
+    );
+    manifest.files.push({ path: f.path, rel, size: f.length });
+  }
+
+  if (!hasIndex) {
+    const html = generateIndexHtml(files.map((f) => ({ fullPath: f.path, size: f.length })), root);
+    await cache.put(
+      "/index.html",
+      new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } }),
+    );
+    manifest.generatedIndex = true;
+  }
+
+  await cache.put(
+    "/__wtd/manifest",
+    new Response(JSON.stringify(manifest), { headers: { "content-type": "application/json" } }),
+  );
+}
+
+function fmt(n) {
+  if (!n) return "0 B";
+  const u = ["B", "kB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`;
 }

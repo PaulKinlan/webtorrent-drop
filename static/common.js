@@ -14,6 +14,99 @@ export const TRACKERS = [
   "wss://tracker.btorrent.xyz",
 ];
 
+/** The Cache API name that holds a site's files, keyed by infohash. */
+export function siteCacheName(hash) {
+  return `wtd-site-${hash}`;
+}
+
+// Correct content-types are what make the served site behave like a real website — the old
+// iframe path served text/html as the wrong type, so text was unreadable.
+const MIME = {
+  html: "text/html; charset=utf-8",
+  htm: "text/html; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  js: "text/javascript; charset=utf-8",
+  mjs: "text/javascript; charset=utf-8",
+  json: "application/json; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  md: "text/plain; charset=utf-8",
+  ts: "text/plain; charset=utf-8",
+  xml: "application/xml; charset=utf-8",
+  svg: "image/svg+xml",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  ico: "image/x-icon",
+  woff: "font/woff",
+  woff2: "font/woff2",
+  ttf: "font/ttf",
+  otf: "font/otf",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mp3: "audio/mpeg",
+  wasm: "application/wasm",
+  pdf: "application/pdf",
+};
+
+export function mimeFor(path) {
+  const ext = path.split(".").pop().toLowerCase();
+  return MIME[ext] ?? "application/octet-stream";
+}
+
+/** The single path segment shared by every file, e.g. "myfolder", or "" if there is none. */
+export function commonRoot(files) {
+  const firsts = files.map((f) => (f.fullPath || f.name || f.path).split("/"));
+  if (!firsts.length || !firsts.every((p) => p.length > 1)) return "";
+  const root = firsts[0][0];
+  return firsts.every((p) => p[0] === root) ? root : "";
+}
+
+/** A file's path relative to the site root (common folder stripped). */
+export function relPath(fullPath, root) {
+  const prefix = root ? root + "/" : "";
+  return fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : fullPath;
+}
+
+/** Build a browsable index.html for a folder that has none, so any drop is viewable. */
+export function generateIndexHtml(files, root) {
+  const rows = files
+    .map((f) => {
+      const rel = relPath(f.fullPath || f.name || f.path, root);
+      const href = rel.split("/").map(encodeURIComponent).join("/");
+      const safe = rel.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `      <li><a href="${href}">${safe}</a><span>${
+        formatBytes(f.size ?? f.length)
+      }</span></li>`;
+    })
+    .join("\n");
+  const title = root || "Dropped files";
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title.replace(/</g, "&lt;")}</title>
+<style>
+  body{font:16px/1.5 system-ui,sans-serif;max-width:44rem;margin:0 auto;padding:2.5rem 1.25rem;
+    background:#0f1115;color:#e6e9ef}
+  @media (prefers-color-scheme:light){body{background:#fff;color:#111}}
+  h1{font-size:1.3rem} p.note{color:#9aa4b2;font-size:.9rem}
+  ul{list-style:none;padding:0;border-top:1px solid #ffffff22}
+  li{display:flex;justify-content:space-between;gap:1rem;padding:.5rem .25rem;
+    border-bottom:1px solid #ffffff14}
+  a{color:#6ea8fe;text-decoration:none;word-break:break-all} a:hover{text-decoration:underline}
+  span{color:#9aa4b2;font-variant-numeric:tabular-nums;flex:none}
+</style></head><body>
+  <h1>${title.replace(/</g, "&lt;")}</h1>
+  <p class="note">No <code>index.html</code> was in this folder, so this listing was generated
+  automatically. ${files.length} file${files.length === 1 ? "" : "s"}.</p>
+  <ul>
+${rows}
+  </ul>
+</body></html>`;
+}
+
 const HEX40 = /^[0-9a-f]{40}$/i;
 const BASE32 = /^[a-z2-7]{32}$/i;
 

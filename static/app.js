@@ -2,7 +2,17 @@
 // The vendored WebTorrent bundle is an ES module with a default export, so it must be
 // imported here rather than loaded as a classic <script> (which throws on `export`).
 import WebTorrent from "/vendor/webtorrent.v2.min.js";
-import { formatBytes, LOG, randomKey, sha256Hex, shareUrl, TRACKERS } from "/common.js";
+import {
+  commonRoot,
+  formatBytes,
+  generateIndexHtml,
+  LOG,
+  mimeFor,
+  randomKey,
+  sha256Hex,
+  shareUrl,
+  TRACKERS,
+} from "/common.js";
 import { track } from "/telemetry.js";
 
 /**
@@ -121,53 +131,13 @@ function filesFromInput(list) {
   });
 }
 
-/** The single path segment shared by every file, e.g. "myfolder", or "" if there is none. */
-function commonRoot(files) {
-  const firsts = files.map((f) => (f.fullPath || f.name).split("/"));
-  if (!firsts.every((p) => p.length > 1)) return "";
-  const root = firsts[0][0];
-  return firsts.every((p) => p[0] === root) ? root : "";
-}
-
 /**
- * Build a browsable index.html for a folder that doesn't have one, so any drop produces a
- * viewable site instead of an error. Links are relative to where the index will live (the
- * common root), so they resolve through the service worker just like a hand-written page.
+ * Build a browsable index.html File for a folder that doesn't have one, so any drop produces a
+ * viewable site. The HTML itself comes from the shared generateIndexHtml.
  */
 function generateIndexFile(files, root) {
   const prefix = root ? root + "/" : "";
-  const rows = files
-    .map((f) => {
-      const full = f.fullPath || f.name;
-      const rel = full.startsWith(prefix) ? full.slice(prefix.length) : full;
-      const href = rel.split("/").map(encodeURIComponent).join("/");
-      const safe = rel.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      return `      <li><a href="${href}">${safe}</a><span>${formatBytes(f.size)}</span></li>`;
-    })
-    .join("\n");
-  const title = root || "Dropped files";
-  const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title.replace(/</g, "&lt;")}</title>
-<style>
-  body{font:16px/1.5 system-ui,sans-serif;max-width:44rem;margin:0 auto;padding:2.5rem 1.25rem;
-    background:#0f1115;color:#e6e9ef}
-  @media (prefers-color-scheme:light){body{background:#fff;color:#111}}
-  h1{font-size:1.3rem} p.note{color:#9aa4b2;font-size:.9rem}
-  ul{list-style:none;padding:0;border-top:1px solid #ffffff22}
-  li{display:flex;justify-content:space-between;gap:1rem;padding:.5rem .25rem;
-    border-bottom:1px solid #ffffff14}
-  a{color:#6ea8fe;text-decoration:none;word-break:break-all} a:hover{text-decoration:underline}
-  span{color:#9aa4b2;font-variant-numeric:tabular-nums;flex:none}
-</style></head><body>
-  <h1>${title.replace(/</g, "&lt;")}</h1>
-  <p class="note">No <code>index.html</code> was in this folder, so this listing was generated
-  automatically. ${files.length} file${files.length === 1 ? "" : "s"}.</p>
-  <ul>
-${rows}
-  </ul>
-</body></html>`;
+  const html = generateIndexHtml(files, root);
   const file = new File([html], "index.html", { type: "text/html" });
   file.fullPath = prefix + "index.html";
   return file;
@@ -329,5 +299,36 @@ copyEl.addEventListener("click", async () => {
   label.textContent = "Copied";
   setTimeout(() => (label.textContent = "Copy"), 1400);
 });
+
+// Programmatic seed hook, for automated testing (no upload click needed). Pass
+// [{path, content}] and it seeds them exactly like a dropped folder, resolving with the
+// infohash and share URL. e.g. await globalThis.__wtdSeed([{path:'site/index.html', content:'<h1>hi'}])
+globalThis.__wtdSeed = (specs) => {
+  const files = specs.map((s) => {
+    const f = new File([s.content], s.path.split("/").pop() || "file", {
+      type: mimeFor(s.path),
+    });
+    f.fullPath = s.path;
+    return f;
+  });
+  const root = commonRoot(files);
+  const hasIndex = files.some((f) => /(^|\/)index\.html$/i.test(f.fullPath));
+  const all = hasIndex ? files : [generateIndexFile(files, root), ...files];
+  return new Promise((resolve, reject) => {
+    try {
+      getClient().seed(all, { name: root || undefined, announce: TRACKERS }, (torrent) => {
+        registerSite(torrent.infoHash, { name: root ?? null, files: all.length });
+        resolve({
+          infoHash: torrent.infoHash,
+          magnet: torrent.magnetURI,
+          url: shareUrl(torrent.infoHash),
+          files: all.map((f) => f.fullPath),
+        });
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+};
 
 console.log(LOG, "drop page ready");

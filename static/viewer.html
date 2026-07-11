@@ -30,15 +30,13 @@
         <div class="bar"><div class="bar__fill" id="bar"></div></div>
         <p class="overlay__stats muted" id="stats">Looking for peers</p>
         <p class="overlay__hint muted" id="hint">
-          This site is served peer-to-peer. It only exists while someone is seeding it.
+          Fetching this site peer-to-peer. Once it's downloaded it is served from your browser at
+          real URLs, so it behaves like a normal website.
         </p>
         <p class="error" id="error" hidden></p>
       </div>
     </div>
 
-    <iframe id="frame" class="frame" hidden title="Site loaded from the swarm"></iframe>
-
-    <!-- Telemetry first and standalone, so it still reports even if viewer.js fails to parse. -->
     <script type="module" src="/telemetry.js"></script>
     <script type="module" src="/viewer.js"></script>
   </body>

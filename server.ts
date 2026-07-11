@@ -84,35 +84,32 @@ Deno.serve({ port: PORT }, async (req, info) => {
   const tele = await handleTelemetry(req, path, info);
   if (tele) return tele;
 
-  // The WebTorrent service worker must be served from the origin root so its scope
-  // covers /webtorrent/*. Service-Worker-Allowed lets it claim the root scope.
+  // Our own service worker, at the origin root so its scope covers the whole site.
   if (path === "/sw.js") {
-    return staticFile("vendor/sw.min.js", { "service-worker-allowed": "/" });
+    return staticFile("sw.js", { "service-worker-allowed": "/" });
   }
 
-  const ASSETS = ["/styles.css", "/app.js", "/viewer.js", "/common.js", "/telemetry.js"];
+  // App assets, always served from the origin (the SW never intercepts these).
+  const ASSETS = [
+    "/styles.css",
+    "/app.js",
+    "/viewer.js",
+    "/reseed.js",
+    "/common.js",
+    "/telemetry.js",
+  ];
   if (path.startsWith("/vendor/") || ASSETS.includes(path)) {
     return staticFile(path.slice(1));
   }
 
-  // Requests under /webtorrent/ are meant to be answered by the service worker, which
-  // streams them out of the swarm. Reaching the server means the SW is not controlling
-  // this client yet. Say so loudly rather than 404ing mysteriously.
-  if (path.startsWith("/webtorrent/")) {
-    return new Response(
-      "The service worker is not active yet, so this request reached the origin. " +
-        "Reload the page. (This server never has your files.)",
-      { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } },
-    );
-  }
-
-  // Subdomain mode: <infohash>.domain serves the viewer for that hash.
+  // On a site's subdomain, every non-reserved path serves the shell. On a first visit (or a
+  // shared deep link before the SW is active) the shell downloads the torrent, caches it, and
+  // reloads — after which the service worker serves that path from cache at its real URL.
   if (hostHash) {
-    if (path === "/" || path === "/index.html") return staticFile("viewer.html", HTML_HEADERS);
-    return new Response("Not found", { status: 404 });
+    return staticFile("viewer.html", HTML_HEADERS);
   }
 
-  // Path mode (stopgap): /<infohash> serves the viewer.
+  // Path mode (stopgap for hosts without a wildcard domain): /<infohash>… serves the shell.
   const first = path.slice(1).split("/")[0];
   if (first && isInfoHash(first)) return staticFile("viewer.html", HTML_HEADERS);
 
