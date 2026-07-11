@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Paint</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        background: #14161c;
+        color: #e8ecf6;
+        font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        touch-action: none;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #262b38;
+        background: #1a1d26;
+      }
+      strong {
+        font-size: 0.95rem;
+        margin-right: auto;
+      }
+      .swatches {
+        display: flex;
+        gap: 0.4rem;
+      }
+      .sw {
+        width: 1.5rem;
+        height: 1.5rem;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        cursor: pointer;
+        padding: 0;
+      }
+      .sw[aria-pressed="true"] {
+        border-color: #fff;
+        transform: scale(1.12);
+      }
+      input[type="range"] {
+        accent-color: #7c8cff;
+      }
+      label {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: #9aa4bb;
+        font-size: 0.82rem;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        border: 1px solid #333a4a;
+        background: #232734;
+        color: #e8ecf6;
+        border-radius: 8px;
+        padding: 0.4rem 0.8rem;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: #7c8cff;
+      }
+      .wrap {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        overflow: auto;
+      }
+      canvas {
+        background: #fff;
+        border-radius: 10px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+        cursor: crosshair;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>Paint</strong>
+      <div class="swatches" id="swatches"></div>
+      <label>size <input type="range" id="size" min="1" max="48" value="6"></label>
+      <button id="erase">Eraser</button>
+      <button id="clear">Clear</button>
+      <button id="save">Save PNG</button>
+    </header>
+    <div class="wrap">
+      <canvas id="c" width="900" height="600"></canvas>
+    </div>
+    <script>
+      const canvas = document.getElementById("c");
+      const ctx = canvas.getContext("2d");
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const colors = [
+        "#111827",
+        "#ef4444",
+        "#f59e0b",
+        "#10b981",
+        "#3b82f6",
+        "#8b5cf6",
+        "#ec4899",
+        "#ffffff",
+      ];
+      let color = colors[0];
+      let size = 6;
+      let erasing = false;
+
+      const swatches = document.getElementById("swatches");
+      colors.forEach((c, i) => {
+        const b = document.createElement("button");
+        b.className = "sw";
+        b.style.background = c;
+        b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
+        b.title = c;
+        b.addEventListener("click", () => {
+          color = c;
+          erasing = false;
+          [...swatches.children].forEach((el) => el.setAttribute("aria-pressed", "false"));
+          b.setAttribute("aria-pressed", "true");
+        });
+        swatches.append(b);
+      });
+
+      document.getElementById("size").addEventListener("input", (e) => {
+        size = +e.target.value;
+      });
+      document.getElementById("erase").addEventListener("click", () => {
+        erasing = true;
+      });
+      document.getElementById("clear").addEventListener("click", () => {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      });
+      document.getElementById("save").addEventListener("click", () => {
+        const a = document.createElement("a");
+        a.download = "painting.png";
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      });
+
+      let drawing = false, lx = 0, ly = 0;
+      function pos(e) {
+        const r = canvas.getBoundingClientRect();
+        const p = e.touches ? e.touches[0] : e;
+        return {
+          x: (p.clientX - r.left) * (canvas.width / r.width),
+          y: (p.clientY - r.top) * (canvas.height / r.height),
+        };
+      }
+      function start(e) {
+        drawing = true;
+        const p = pos(e);
+        lx = p.x;
+        ly = p.y;
+        dot(p.x, p.y);
+        e.preventDefault();
+      }
+      function move(e) {
+        if (!drawing) return;
+        const p = pos(e);
+        ctx.strokeStyle = erasing ? "#ffffff" : color;
+        ctx.lineWidth = size;
+        ctx.beginPath();
+        ctx.moveTo(lx, ly);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        lx = p.x;
+        ly = p.y;
+        e.preventDefault();
+      }
+      function dot(x, y) {
+        ctx.fillStyle = erasing ? "#ffffff" : color;
+        ctx.beginPath();
+        ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      function end() {
+        drawing = false;
+      }
+
+      canvas.addEventListener("mousedown", start);
+      canvas.addEventListener("mousemove", move);
+      addEventListener("mouseup", end);
+      canvas.addEventListener("touchstart", start, { passive: false });
+      canvas.addEventListener("touchmove", move, { passive: false });
+      canvas.addEventListener("touchend", end);
+    </script>
+  </body>
+</html>

@@ -146,9 +146,16 @@ Deno.serve({ port: PORT }, async (req, info) => {
     "/reseed.js",
     "/common.js",
     "/telemetry.js",
+    "/ide.js",
     "/favicon.svg",
   ];
   if (path.startsWith("/vendor/") || ASSETS.includes(path)) {
+    return staticFile(path.slice(1));
+  }
+
+  // Example site sources (templates for the gallery + IDE). Served as normal static assets on
+  // the apex; a leading-dot-segment guard keeps this from escaping the examples dir.
+  if (path.startsWith("/examples/") && !path.includes("..")) {
     return staticFile(path.slice(1));
   }
 

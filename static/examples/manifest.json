@@ -1,0 +1,22 @@
+{
+  "examples": [
+    {
+      "slug": "hello",
+      "title": "Hello, swarm",
+      "blurb": "An animated hero page. Three files — a good first remix.",
+      "files": ["index.html", "style.css", "app.js"]
+    },
+    {
+      "slug": "snake",
+      "title": "Neon Snake",
+      "blurb": "A full arcade game in one file. Arrows, WASD, or swipe.",
+      "files": ["index.html"]
+    },
+    {
+      "slug": "paint",
+      "title": "Paint",
+      "blurb": "A working drawing app — colours, brush size, save to PNG.",
+      "files": ["index.html"]
+    }
+  ]
+}

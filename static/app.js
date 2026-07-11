@@ -551,6 +551,20 @@ globalThis.__wtdSeed = (specs) => {
   });
 };
 
+// Host a set of in-memory files (from the inline IDE / examples). Builds File objects with the
+// right paths + MIME and runs the exact same seed → register flow as a dropped folder, so the
+// share URL, activity log, persist toggle and registry gate all apply identically.
+globalThis.__unhostedHost = (specs) => {
+  const files = specs.map((s) => {
+    const path = s.path.replace(/^\/+/, "");
+    const f = new File([s.content], path.split("/").pop() || "file", { type: mimeFor(path) });
+    f.fullPath = path;
+    return f;
+  });
+  seed(files);
+  statusEl.scrollIntoView({ behavior: "smooth", block: "center" });
+};
+
 // Re-seed any sites the user chose to keep alive, and list them.
 restorePersisted().catch((e) => console.warn(LOG, "restore error:", e));
 

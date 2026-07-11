@@ -55,6 +55,16 @@
         </div>
       </div>
 
+      <!-- Examples gallery + inline IDE. Hidden until ide.js enhances it, so no-JS still
+           gets a working drop zone above. -->
+      <section id="examples" class="examples" hidden>
+        <div class="examples__head">
+          <h2>Or start from an example</h2>
+          <button type="button" class="btn" id="newProject">Blank project</button>
+        </div>
+        <div class="gallery" id="gallery"></div>
+      </section>
+
       <section id="status" class="panel" hidden>
         <div class="row">
           <span class="dot" id="dot"></span>
@@ -201,6 +211,52 @@
         </form>
       </dialog>
 
+      <!-- Inline IDE. A full-screen editor overlay: file list, code editor, sandboxed live
+           preview, and a Host button that seeds the files exactly like a dropped folder. -->
+      <div id="ide" class="ide" hidden role="dialog" aria-modal="true" aria-label="Site editor">
+        <header class="ide__bar">
+          <strong class="ide__title" id="ideTitle">New project</strong>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="ideAddFile">+ File</button>
+          <button type="button" class="btn btn--primary" id="ideHost">Host it</button>
+          <button type="button" class="btn" id="ideClose" aria-label="Close editor">Close</button>
+        </header>
+        <div class="ide__grid">
+          <aside class="ide__files">
+            <ul id="ideFileList" class="ide__filelist"></ul>
+          </aside>
+          <div class="ide__editwrap">
+            <textarea
+              id="ideCode"
+              class="ide__code"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              wrap="off"
+              aria-label="File contents"
+            ></textarea>
+          </div>
+          <div class="ide__previewwrap">
+            <div class="ide__previewbar">
+              <span class="muted">Live preview</span>
+              <span class="spacer"></span>
+              <button type="button" class="btn btn--sm" id="ideRefresh">Refresh</button>
+            </div>
+            <iframe
+              id="idePreview"
+              class="ide__preview"
+              sandbox="allow-scripts allow-pointer-lock allow-modals"
+              title="Live preview"
+            ></iframe>
+          </div>
+        </div>
+        <p class="ide__note" id="ideNote">
+          Editing changes the content, and the content <em>is</em> the address — so every time you
+          host, you get a new URL. The old one keeps pointing at the old version.
+        </p>
+        <div class="ide__dropzone" id="ideDropzone" hidden>Drop files to add them</div>
+      </div>
+
       <footer class="byline">
         Peer-to-peer, ephemeral, and gone when you close the tab.
         <a href="https://github.com/PaulKinlan/webtorrent-drop">Source</a>.
@@ -210,5 +266,6 @@
     <!-- Telemetry first and standalone, so it still reports even if app.js fails to parse. -->
     <script type="module" src="/telemetry.js"></script>
     <script type="module" src="/app.js"></script>
+    <script type="module" src="/ide.js"></script>
   </body>
 </html>
