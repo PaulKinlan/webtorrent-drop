@@ -59,6 +59,46 @@ const openEl = document.getElementById("open");
 const activityEl = document.getElementById("activity");
 const filesEl = document.getElementById("files");
 const errorEl = document.getElementById("error");
+const confirmEl = document.getElementById("confirm");
+const confirmBodyEl = document.getElementById("confirmBody");
+
+// Safari has no `closedby` support yet, so add the light-dismiss (click-outside) fallback.
+if (!("closedBy" in HTMLDialogElement.prototype)) {
+  confirmEl.addEventListener("click", (e) => {
+    if (e.target !== confirmEl) return; // clicks inside the form bubble to the dialog
+    const r = confirmEl.getBoundingClientRect();
+    const inside = r.top <= e.clientY && e.clientY <= r.top + r.height &&
+      r.left <= e.clientX && e.clientX <= r.left + r.width;
+    if (!inside) confirmEl.close("cancel");
+  });
+}
+
+/** Ask the user to confirm before a folder is shared publicly. Resolves true to proceed. */
+function confirmUpload(files) {
+  const total = files.reduce((n, f) => n + (f.size || 0), 0);
+  confirmBodyEl.textContent = `${files.length} file${files.length === 1 ? "" : "s"}, ${
+    formatBytes(total)
+  }.`;
+  confirmEl.returnValue = "";
+  confirmEl.showModal();
+  return new Promise((resolve) => {
+    confirmEl.addEventListener(
+      "close",
+      () => resolve(confirmEl.returnValue === "share"),
+      { once: true },
+    );
+  });
+}
+
+/** Confirm, then seed. Called from both the drop and picker paths. */
+async function startSeed(files) {
+  if (!files.length) return fail("That was empty. Nothing to seed.");
+  if (!(await confirmUpload(files))) {
+    statusEl.hidden = true; // cancelled
+    return;
+  }
+  seed(files);
+}
 
 function fail(msg) {
   console.error(LOG, "error:", msg);
@@ -256,7 +296,7 @@ dropEl.addEventListener("drop", async (e) => {
   statusEl.hidden = false;
   stateEl.textContent = "Reading files…";
   try {
-    seed(await filesFromDataTransfer(e.dataTransfer));
+    await startSeed(await filesFromDataTransfer(e.dataTransfer));
   } catch (err) {
     fail(err.message || String(err));
   }
@@ -278,7 +318,7 @@ dropEl.addEventListener("click", (e) => {
 });
 
 for (const input of [dirEl, filesInputEl]) {
-  input.addEventListener("change", () => {
+  input.addEventListener("change", async () => {
     console.log(LOG, "picker change:", input.id, input.files.length, "files");
     if (!input.files.length) return;
     // Acknowledge immediately, before any async work, so a selection is never silent.
@@ -286,7 +326,7 @@ for (const input of [dirEl, filesInputEl]) {
     stateEl.textContent = "Reading files…";
     errorEl.hidden = true;
     try {
-      seed(filesFromInput(input.files));
+      await startSeed(filesFromInput(input.files));
     } catch (err) {
       fail(err.message || String(err));
     }

@@ -141,6 +141,37 @@
 
       <p id="error" class="error" hidden></p>
 
+      <!-- Upload confirmation. A modal <dialog> (centered + focus-trapped via showModal),
+           light-dismissable via closedby="any" with a JS fallback for Safari. -->
+      <dialog id="confirm" class="confirm" closedby="any" aria-labelledby="confirmTitle">
+        <form method="dialog">
+          <h2 id="confirmTitle">Share these files?</h2>
+          <p class="confirm__body" id="confirmBody"></p>
+          <p class="confirm__warn">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 9v4" />
+              <path d="M12 17h.01" />
+              <path
+                d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+              />
+            </svg>
+            Anyone with the link can open this, and it stays live only while this tab is open.
+          </p>
+          <div class="confirm__actions">
+            <button value="cancel" class="btn">Cancel</button>
+            <button value="share" class="btn btn--primary" autofocus>Share</button>
+          </div>
+        </form>
+      </dialog>
+
       <footer class="byline">
         Peer-to-peer, ephemeral, and gone when you close the tab.
         <a href="https://github.com/PaulKinlan/webtorrent-drop">Source</a>.

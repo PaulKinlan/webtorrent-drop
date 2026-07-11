@@ -270,6 +270,76 @@ code {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* Upload confirmation dialog. showModal() centres it in the top layer; we only style the
+   card and the backdrop. */
+.confirm {
+  border: 0;
+  border-radius: 14px;
+  padding: 0;
+  max-width: 26rem;
+  width: calc(100% - 2rem);
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+}
+.confirm::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.confirm form {
+  margin: 0;
+  padding: 1.5rem;
+}
+.confirm h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+.confirm__body {
+  color: var(--muted);
+  margin: 0 0 0.25rem;
+}
+.confirm__warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  color: var(--warn);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.confirm__warn svg {
+  width: 1.1em;
+  height: 1.1em;
+  flex: none;
+  margin-top: 0.15em;
+}
+.confirm__actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn--primary:hover {
+  filter: brightness(1.1);
+  color: #fff;
+}
+/* A gentle entrance; respects reduced-motion by not animating there. */
+@media (prefers-reduced-motion: no-preference) {
+  .confirm[open] {
+    animation: confirm-in 0.15s ease-out;
+  }
+  @keyframes confirm-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+  }
+}
 a {
   color: var(--accent);
 }
