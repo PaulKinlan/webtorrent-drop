@@ -61,6 +61,134 @@ const filesEl = document.getElementById("files");
 const errorEl = document.getElementById("error");
 const confirmEl = document.getElementById("confirm");
 const confirmBodyEl = document.getElementById("confirmBody");
+const persistEl = document.getElementById("persist");
+const shareBtnEl = document.getElementById("shareBtn");
+const restoredEl = document.getElementById("restored");
+const restoredListEl = document.getElementById("restoredList");
+
+// The most recent successful seed, so the persist toggle knows what to save.
+let lastSeed = null;
+
+// ── Persist across reloads ─────────────────────────────────────────────────────────────
+// "Keep alive" copies the seeded files into the Cache API (chosen over OPFS/IndexedDB: it
+// reuses the viewer's reseed path, needs no permission prompt, and gives an immutable snapshot
+// so the infohash stays stable — a live directory handle could change and break the share URL).
+// On load we re-seed anything saved. Storage is per-origin, so this never touches hosted sites.
+const PERSIST_KEY = "wtd-persisted";
+const persistIndex = () => {
+  try {
+    return JSON.parse(localStorage.getItem(PERSIST_KEY) || "[]");
+  } catch {
+    return [];
+  }
+};
+const setPersistIndex = (a) => localStorage.setItem(PERSIST_KEY, JSON.stringify(a));
+const seedCache = (infoHash) => `wtd-seed-${infoHash}`;
+
+async function persistSeed({ infoHash, name, files }) {
+  const cache = await caches.open(seedCache(infoHash));
+  const manifest = { infoHash, name, files: [] };
+  for (const f of files) {
+    await cache.put(
+      "/" + f.fullPath.split("/").map(encodeURIComponent).join("/"),
+      new Response(f, { headers: { "content-type": mimeFor(f.fullPath) } }),
+    );
+    manifest.files.push({ path: f.fullPath, size: f.size });
+  }
+  await cache.put(
+    "/__manifest",
+    new Response(JSON.stringify(manifest), { headers: { "content-type": "application/json" } }),
+  );
+  const idx = persistIndex();
+  if (!idx.some((x) => x.infoHash === infoHash)) {
+    idx.push({ infoHash, name: name || null });
+    setPersistIndex(idx);
+  }
+  console.log(LOG, "persisted", infoHash);
+  renderRestored();
+}
+
+async function unpersistSeed(infoHash) {
+  await caches.delete(seedCache(infoHash));
+  setPersistIndex(persistIndex().filter((x) => x.infoHash !== infoHash));
+  console.log(LOG, "unpersisted", infoHash);
+  renderRestored();
+}
+
+async function restorePersisted() {
+  for (const { infoHash, name } of persistIndex()) {
+    try {
+      const cache = await caches.open(seedCache(infoHash));
+      const mres = await cache.match("/__manifest");
+      if (!mres) continue;
+      const manifest = await mres.json();
+      const files = [];
+      for (const m of manifest.files) {
+        const res = await cache.match("/" + m.path.split("/").map(encodeURIComponent).join("/"));
+        if (!res) continue;
+        const blob = await res.blob();
+        const file = new File([blob], m.path.split("/").pop());
+        file.fullPath = m.path;
+        files.push(file);
+      }
+      if (!files.length) continue;
+      getClient().seed(files, { name: name || undefined, announce: TRACKERS }, (t) => {
+        if (t.infoHash.toLowerCase() !== infoHash.toLowerCase()) {
+          console.warn(LOG, "persisted reseed infohash mismatch:", t.infoHash, "vs", infoHash);
+        } else {
+          console.log(LOG, "re-seeding saved site", infoHash);
+        }
+      });
+    } catch (e) {
+      console.warn(LOG, "restore failed for", infoHash, e);
+    }
+  }
+  renderRestored();
+}
+
+function renderRestored() {
+  const idx = persistIndex();
+  restoredEl.hidden = idx.length === 0;
+  restoredListEl.replaceChildren(
+    ...idx.map(({ infoHash, name }) => {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = shareUrl(infoHash);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = name || infoHash.slice(0, 12) + "…";
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "restored__remove";
+      rm.title = "Stop keeping this alive";
+      rm.textContent = "×";
+      rm.addEventListener("click", () => unpersistSeed(infoHash));
+      li.append(a, rm);
+      return li;
+    }),
+  );
+}
+
+if (persistEl) {
+  persistEl.addEventListener("change", async () => {
+    if (!lastSeed) return;
+    if (persistEl.checked) await persistSeed(lastSeed);
+    else await unpersistSeed(lastSeed.infoHash);
+  });
+}
+
+// ── Web Share ──────────────────────────────────────────────────────────────────────────
+if (shareBtnEl && "share" in navigator) {
+  shareBtnEl.addEventListener("click", async () => {
+    try {
+      await navigator.share({
+        title: "A site on unhosted.dev",
+        text: "I'm hosting this from my browser, peer-to-peer:",
+        url: urlEl.value,
+      });
+    } catch { /* user cancelled the share sheet; ignore */ }
+  });
+}
 
 // Safari has no `closedby` support yet, so add the light-dismiss (click-outside) fallback.
 if (!("closedBy" in HTMLDialogElement.prototype)) {
@@ -248,6 +376,11 @@ function seed(files) {
     dotEl.classList.add("is-live");
     stateEl.textContent = generated ? "Seeding (file browser)" : "Seeding";
 
+    // Persist toggle + Web Share button, now that there is a share URL.
+    lastSeed = { infoHash: torrent.infoHash, name, files };
+    persistEl.checked = persistIndex().some((x) => x.infoHash === torrent.infoHash);
+    if ("share" in navigator) shareBtnEl.hidden = false;
+
     // Register the site and reveal the owner's private activity log.
     registerSite(torrent.infoHash, { name: name ?? null, files: files.length, bytes: total })
       .then((activityUrl) => {
@@ -370,5 +503,8 @@ globalThis.__wtdSeed = (specs) => {
     }
   });
 };
+
+// Re-seed any sites the user chose to keep alive, and list them.
+restorePersisted().catch((e) => console.warn(LOG, "restore error:", e));
 
 console.log(LOG, "drop page ready");

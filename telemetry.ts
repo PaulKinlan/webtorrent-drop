@@ -199,7 +199,7 @@ function parseCookies(req: Request): Record<string, string> {
 }
 
 async function hasAdminSession(req: Request): Promise<boolean> {
-  const sid = parseCookies(req)["wtd_admin"];
+  const sid = parseCookies(req)["__Host-wtd_admin"];
   if (!sid) return false;
   return !!(await kv.get(["admin-session", sid])).value;
 }
@@ -224,7 +224,7 @@ async function adminLogin(req: Request): Promise<Response> {
     status: 303,
     headers: {
       "location": "/_admin",
-      "set-cookie": `wtd_admin=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${
+      "set-cookie": `__Host-wtd_admin=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${
         SESSION_MS / 1000
       }`,
       "referrer-policy": "no-referrer",
@@ -316,12 +316,12 @@ async function admin(req: Request): Promise<Response> {
 
   // Log out: drop the session and clear the cookie.
   if (url.searchParams.get("logout") !== null) {
-    const sid = parseCookies(req)["wtd_admin"];
+    const sid = parseCookies(req)["__Host-wtd_admin"];
     if (sid) await kv.delete(["admin-session", sid]);
     return new Response(loginForm("Signed out."), {
       headers: {
         "content-type": "text/html; charset=utf-8",
-        "set-cookie": "wtd_admin=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
+        "set-cookie": "__Host-wtd_admin=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0",
         "referrer-policy": "no-referrer",
       },
     });

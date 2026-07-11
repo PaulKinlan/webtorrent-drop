@@ -20,6 +20,39 @@ function infoHash() {
 const cacheName = (h) => `wtd-site-${h}`;
 const MANIFEST = "/__wtd/manifest";
 
+// Strict CSP enforced on ALL served (hosted) content. A hosted site is untrusted code running
+// on its own <infohash>.unhosted.dev origin, so we lock it to its own package: everything must
+// be same-origin (i.e. from the swarm, served by us). connect-src is limited to same-origin
+// (its own files + our /_beacon) plus the wss trackers our injected reseed.js needs — so the
+// hosted page cannot fetch, XHR, or open a socket to any external host (no phone-home, no
+// exfiltration, no third-party tracking). 'unsafe-inline' is allowed for scripts/styles because
+// arbitrary static sites rely on inline code; that only affects the site's isolation from
+// itself, not its ability to reach out (which connect-src governs). WebRTC is not covered by
+// connect-src and stays available because reseed.js needs it — a small residual risk noted in
+// the security analysis. frame-ancestors 'self' stops the hosted page being framed elsewhere.
+const SERVED_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "media-src 'self' blob:",
+  "connect-src 'self' wss://tracker.openwebtorrent.com wss://tracker.webtorrent.dev wss://tracker.btorrent.xyz",
+  "frame-src 'self'",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
+
+function harden(headers) {
+  headers.set("content-security-policy", SERVED_CSP);
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("referrer-policy", "no-referrer");
+  return headers;
+}
+
 // App assets and APIs the SW must NOT intercept — they always come from the origin.
 function isReserved(path) {
   if (path.startsWith("/vendor/")) return true;
@@ -80,7 +113,10 @@ async function serve(req, url, h) {
     if ((res.headers.get("content-type") || "").includes("text/html")) {
       return injectReseed(res);
     }
-    return res;
+    return new Response(res.body, {
+      status: res.status,
+      headers: harden(new Headers(res.headers)),
+    });
   }
 
   // Not cached yet: this is a first visit (or a deep link before the shell has run). Let the
@@ -107,7 +143,7 @@ async function injectReseed(res) {
   if (!html.includes("data-wtd-reseed")) {
     html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, tag + "</body>") : html + tag;
   }
-  const headers = new Headers(res.headers);
+  const headers = harden(new Headers(res.headers));
   headers.set("content-type", "text/html; charset=utf-8");
   headers.set("cache-control", "no-store");
   return new Response(html, { status: 200, statusText: "OK", headers });

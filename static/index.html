@@ -14,6 +14,11 @@
         uploaded. This server never sees your files.
       </p>
 
+      <section id="restored" class="restored" hidden>
+        <h2>Re-seeding your saved sites</h2>
+        <ul id="restoredList"></ul>
+      </section>
+
       <div id="drop" class="drop">
         <svg
           class="drop__icon"
@@ -76,7 +81,7 @@
               </svg>
               <span>Copy</span>
             </button>
-            <a id="open" class="btn" target="_blank" rel="noopener">
+            <a id="open" class="btn" target="_blank" rel="noopener noreferrer">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -92,6 +97,23 @@
               </svg>
               <span>Open</span>
             </a>
+            <button type="button" id="shareBtn" class="btn" hidden>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="18" cy="5" r="3" />
+                <circle cx="6" cy="12" r="3" />
+                <circle cx="18" cy="19" r="3" />
+                <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+              </svg>
+              <span>Share</span>
+            </button>
             <a
               id="activity"
               class="btn"
@@ -134,6 +156,12 @@
             Close this tab and the site goes with it, unless someone else is still viewing it. That
             is the deal: browsers cannot seed in the background.
           </p>
+
+          <label class="toggle">
+            <input type="checkbox" id="persist" role="switch">
+            <span>Keep this site alive across reloads (saves a copy in this browser, re-seeds on
+              reload)</span>
+          </label>
         </div>
 
         <ul id="files" class="files"></ul>
