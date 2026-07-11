@@ -15,7 +15,7 @@
 //
 //   deno task dev     # http://localhost:8000
 
-import { handleTelemetry } from "./telemetry.ts";
+import { handleTelemetry, isBlocked } from "./telemetry.ts";
 
 const PORT = Number(Deno.env.get("PORT") ?? 8000);
 
@@ -75,6 +75,29 @@ async function staticFile(name: string, extraHeaders: HeadersInit = {}): Promise
   }
 }
 
+// A blocked site: HTTP 451 (Unavailable For Legal Reasons) with a plain notice. We can stop
+// serving the bootstrap from this domain, but the content still exists in the swarm — we can't
+// remove it, only refuse to be its gateway.
+function blockedResponse(hash: string): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>unavailable · unhosted.dev</title>
+<style>body{font:15px/1.6 system-ui,sans-serif;background:#0f1115;color:#e6e9ef;display:grid;
+place-items:center;min-height:100dvh;margin:0;padding:1.5rem}main{max-width:32rem;text-align:center}
+h1{font-size:1.15rem}code{font-family:ui-monospace,Menlo,monospace;font-size:.8rem;color:#9aa4b2;
+word-break:break-all}a{color:#6ea8fe}</style></head><body><main>
+<h1>This site has been taken down</h1>
+<p>The content at this address was removed from unhosted.dev for violating its terms.
+It is no longer served here.</p>
+<p><code>${hash}</code></p>
+<p><a href="https://unhosted.dev/">unhosted.dev</a></p>
+</main></body></html>`;
+  return new Response(html, {
+    status: 451,
+    headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+  });
+}
+
 Deno.serve({ port: PORT }, async (req, info) => {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -111,13 +134,18 @@ Deno.serve({ port: PORT }, async (req, info) => {
   // On a site's subdomain, every non-reserved path serves the shell. On a first visit (or a
   // shared deep link before the SW is active) the shell downloads the torrent, caches it, and
   // reloads — after which the service worker serves that path from cache at its real URL.
+  // A blocked infohash gets a takedown notice instead — this domain stops being its gateway.
   if (hostHash) {
+    if (await isBlocked(hostHash)) return blockedResponse(hostHash);
     return staticFile("viewer.html", HTML_HEADERS);
   }
 
   // Path mode (stopgap for hosts without a wildcard domain): /<infohash>… serves the shell.
   const first = path.slice(1).split("/")[0];
-  if (first && isInfoHash(first)) return staticFile("viewer.html", HTML_HEADERS);
+  if (first && isInfoHash(first)) {
+    if (await isBlocked(first)) return blockedResponse(first);
+    return staticFile("viewer.html", HTML_HEADERS);
+  }
 
   if (path === "/" || path === "/index.html") return staticFile("index.html", HTML_HEADERS);
 

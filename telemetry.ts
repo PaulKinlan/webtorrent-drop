@@ -30,6 +30,28 @@ async function sha256Hex(s: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// --- Blocklist -----------------------------------------------------------------------------
+// A takedown lever: an infohash on this list is refused at the edge, so <hash>.unhosted.dev
+// stops serving the bootstrap (and the SW won't get anything new to cache). This does NOT and
+// cannot remove the content from the swarm — anyone with the infohash and a tracker can still
+// fetch it peer-to-peer. It only stops OUR domain being the gateway. Blocks do not expire.
+
+type Blocked = { at: number; reason: string };
+
+/** Is this infohash on the takedown list? Called by the server on every site request. */
+export async function isBlocked(infoHash: string): Promise<boolean> {
+  if (!isInfoHash(infoHash)) return false;
+  return !!(await kv.get<Blocked>(["blocked", infoHash.toLowerCase()])).value;
+}
+
+async function blockedList(): Promise<Array<{ hash: string } & Blocked>> {
+  const out: Array<{ hash: string } & Blocked> = [];
+  for await (const e of kv.list<Blocked>({ prefix: ["blocked"] }, { limit: 500 })) {
+    out.push({ hash: String(e.key[1]), ...e.value });
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
 /** Truncate an IP so a log of "who loaded what" is coarse: IPv4 -> /16, IPv6 -> /48. */
 export function truncateIp(raw: string | null): string {
   if (!raw) return "";
@@ -178,7 +200,10 @@ export async function handleTelemetry(
   }
 
   if (path === "/_admin" && req.method === "POST") {
-    return await adminLogin(req);
+    const form = new URLSearchParams(await req.text());
+    const action = form.get("action");
+    if (action === "block" || action === "unblock") return await adminBlock(req, form, action);
+    return await adminLogin(form);
   }
   if (path === "/_admin" && req.method === "GET") {
     return await admin(req);
@@ -204,12 +229,53 @@ async function hasAdminSession(req: Request): Promise<boolean> {
   return !!(await kv.get(["admin-session", sid])).value;
 }
 
+/** Admin auth: a header token (for scripts) or a valid cookie session (from the login form). */
+async function isAdmin(req: Request, token: string): Promise<boolean> {
+  const headerTok = req.headers.get("x-admin-token");
+  return (headerTok != null && timingSafeEqual(headerTok, token)) || await hasAdminSession(req);
+}
+
+/** Add or remove an infohash on the takedown list. Requires an authenticated admin. */
+async function adminBlock(
+  req: Request,
+  form: URLSearchParams,
+  action: "block" | "unblock",
+): Promise<Response> {
+  const token = Deno.env.get("REPORT_ADMIN_TOKEN");
+  if (!token) return new Response("Admin disabled", { status: 503 });
+  if (!(await isAdmin(req, token))) {
+    return new Response(loginForm("Sign in to manage the blocklist."), {
+      status: 401,
+      headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+    });
+  }
+  const ih = (form.get("infohash") ?? "").toLowerCase().trim();
+  if (!isInfoHash(ih)) {
+    return new Response(loginForm("That is not a valid infohash."), {
+      status: 400,
+      headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+    });
+  }
+  if (action === "block") {
+    await kv.set(["blocked", ih], {
+      at: Date.now(),
+      reason: (form.get("reason") ?? "").slice(0, 200),
+    });
+  } else {
+    await kv.delete(["blocked", ih]);
+  }
+  // Redirect back so the list refreshes and a reload doesn't re-submit.
+  return new Response(null, {
+    status: 303,
+    headers: { "location": "/_admin#blocklist", "referrer-policy": "no-referrer" },
+  });
+}
+
 /** Verify the admin password from a login form and, on success, start a cookie session. */
-async function adminLogin(req: Request): Promise<Response> {
+async function adminLogin(form: URLSearchParams): Promise<Response> {
   const token = Deno.env.get("REPORT_ADMIN_TOKEN");
   if (!token) return new Response("Admin disabled", { status: 503 });
 
-  const form = new URLSearchParams(await req.text());
   const pw = form.get("password") ?? "";
   if (!pw || !timingSafeEqual(pw, token)) {
     return new Response(loginForm("Wrong password."), {
@@ -303,6 +369,32 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+// --- Pagination over the KV event log -----------------------------------------------------
+// Deno KV cursors are forward-only, so we carry a breadcrumb of visited page-start cursors in
+// the `hist` param (base64 JSON). Next pushes the current cursor; Prev pops one. That gives
+// real Prev/Next without the store having to support backward scans.
+
+type Nav = { prev?: string; next?: string; newest: string; page: number; kind: string | null };
+
+function encodeHist(arr: string[]): string {
+  return btoa(JSON.stringify(arr.slice(-200)));
+}
+function decodeHist(s: string | null): string[] {
+  if (!s) return [];
+  try {
+    const a = JSON.parse(atob(s));
+    return Array.isArray(a) ? a.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+function adminHref(params: Record<string, string | undefined>): string {
+  const u = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) u.set(k, v);
+  const q = u.toString();
+  return q ? `/_admin?${q}` : "/_admin";
+}
+
 async function admin(req: Request): Promise<Response> {
   const token = Deno.env.get("REPORT_ADMIN_TOKEN");
   const url = new URL(req.url);
@@ -329,35 +421,65 @@ async function admin(req: Request): Promise<Response> {
 
   // Auth is a cookie session (from the login form) or an x-admin-token header (for scripts).
   // Never a URL query param, so the secret can't leak via referer, history, or logs.
-  const headerTok = req.headers.get("x-admin-token");
-  const authed = (headerTok != null && timingSafeEqual(headerTok, token)) ||
-    await hasAdminSession(req);
-  if (!authed) {
+  if (!(await isAdmin(req, token))) {
     return new Response(loginForm(), {
       status: 401,
       headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
     });
   }
 
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? "200"), MAX_LIST);
+  const PAGE = Math.min(Math.max(Number(url.searchParams.get("limit") ?? "100"), 10), 500);
   const kindFilter = url.searchParams.get("kind"); // "beacon" | "report" | null
+  const cursor = url.searchParams.get("cursor") ?? "";
+  const hist = decodeHist(url.searchParams.get("hist"));
+
   const events: Stored[] = [];
-  for await (const entry of kv.list<Stored>({ prefix: ["ev"] }, { limit: MAX_LIST })) {
+  const iter = kv.list<Stored>({ prefix: ["ev"] }, {
+    limit: PAGE,
+    cursor: cursor || undefined,
+  });
+  for await (const entry of iter) {
     const rec = entry.value;
     if (kindFilter && rec.kind !== kindFilter) continue;
     events.push(rec);
-    if (events.length >= limit) break;
   }
+  const nextCursor = iter.cursor;
 
   if (url.searchParams.get("format") === "json") {
-    return new Response(JSON.stringify({ count: events.length, events }, null, 2), {
+    return new Response(JSON.stringify({ count: events.length, nextCursor, events }, null, 2), {
       headers: {
         "content-type": "application/json; charset=utf-8",
         "referrer-policy": "no-referrer",
       },
     });
   }
-  return new Response(adminHtml(events), {
+
+  const limitParam = String(PAGE);
+  const kindParam = kindFilter ?? undefined;
+  const nav: Nav = {
+    newest: adminHref({ limit: limitParam, kind: kindParam }),
+    page: hist.length + 1,
+    kind: kindFilter,
+    prev: hist.length > 0
+      ? adminHref({
+        limit: limitParam,
+        kind: kindParam,
+        cursor: hist[hist.length - 1] || undefined,
+        hist: hist.length > 1 ? encodeHist(hist.slice(0, -1)) : undefined,
+      })
+      : undefined,
+    next: nextCursor
+      ? adminHref({
+        limit: limitParam,
+        kind: kindParam,
+        cursor: nextCursor,
+        hist: encodeHist([...hist, cursor]),
+      })
+      : undefined,
+  };
+
+  const blocked = await blockedList();
+  return new Response(adminHtml(events, nav, blocked), {
     headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
   });
 }
@@ -422,7 +544,11 @@ ${
 </body></html>`;
 }
 
-function adminHtml(events: Stored[]): string {
+function adminHtml(
+  events: Stored[],
+  nav: Nav,
+  blocked: Array<{ hash: string; at: number; reason: string }>,
+): string {
   const byType: Record<string, number> = {};
   for (const e of events) {
     const t = e.kind === "report"
@@ -435,30 +561,80 @@ function adminHtml(events: Stored[]): string {
     .map(([t, n]) => `<span class="pill">${esc(t)} <b>${n}</b></span>`)
     .join(" ");
 
+  // Kind filter links keep the current page size but reset to the first page.
+  const filter = (label: string, kind: string | null) => {
+    const href = adminHref({ kind: kind ?? undefined });
+    const on = (nav.kind ?? null) === kind;
+    return `<a class="chip${on ? " on" : ""}" href="${href}">${label}</a>`;
+  };
+
   const rows = events.map((e) => {
     const when = new Date(e.at).toISOString().replace("T", " ").slice(0, 19);
     const label = e.kind === "report"
       ? (e.data as { type?: string })?.type ?? "report"
       : (e.data as { event?: string })?.event ?? "beacon";
+    const ih = (e.data as { infoHash?: unknown })?.infoHash;
+    const blockBtn = isInfoHash(ih)
+      ? `<form method="post" action="/_admin" class="inline">
+          <input type="hidden" name="action" value="block">
+          <input type="hidden" name="infohash" value="${esc(ih)}">
+          <button class="mini" title="Block ${esc(ih)}">block</button>
+        </form>`
+      : "";
     return `<tr>
       <td class="mono">${when}</td>
       <td><span class="tag ${e.kind}">${esc(label)}</span></td>
       <td class="mono">${esc(e.ipPrefix)}</td>
-      <td class="mono small">${esc(e.host)}</td>
+      <td class="mono small">${esc(e.host)} ${blockBtn}</td>
       <td><pre>${esc(JSON.stringify(e.data))}</pre></td>
     </tr>`;
   }).join("\n");
 
+  const blockedRows = blocked.map((b) => {
+    const when = new Date(b.at).toISOString().slice(0, 10);
+    return `<li>
+      <code>${esc(b.hash)}</code>
+      <span class="small">${b.reason ? esc(b.reason) : "—"} · ${when}</span>
+      <form method="post" action="/_admin" class="inline">
+        <input type="hidden" name="action" value="unblock">
+        <input type="hidden" name="infohash" value="${esc(b.hash)}">
+        <button class="mini danger">unblock</button>
+      </form>
+    </li>`;
+  }).join("\n");
+
+  const pager = `<nav class="pager">
+    ${
+    nav.prev
+      ? `<a class="btn" href="${nav.prev}">‹ Prev</a>`
+      : `<span class="btn off">‹ Prev</span>`
+  }
+    <span class="small">page ${nav.page} · ${events.length} shown</span>
+    ${
+    nav.next
+      ? `<a class="btn" href="${nav.next}">Next ›</a>`
+      : `<span class="btn off">Next ›</span>`
+  }
+    ${nav.page > 1 ? `<a class="btn ghost" href="${nav.newest}">newest</a>` : ""}
+  </nav>`;
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
 <title>webtorrent-drop · telemetry</title>
 <style>
   body{font:14px/1.5 system-ui,sans-serif;margin:0;background:#0f1115;color:#e6e9ef}
-  header{padding:1rem 1.25rem;border-bottom:1px solid #262b33;position:sticky;top:0;background:#0f1115}
+  header{padding:1rem 1.25rem;border-bottom:1px solid #262b33;position:sticky;top:0;background:#0f1115;z-index:2}
   h1{font-size:1.1rem;margin:0 0 .5rem}
+  a{color:#6ea8fe}
   .pill{display:inline-block;background:#161a20;border:1px solid #262b33;border-radius:999px;
     padding:.15rem .6rem;margin:.15rem;font-size:.8rem}
   .pill b{color:#6ea8fe}
+  .chip{display:inline-block;padding:.15rem .6rem;margin:.15rem .15rem 0 0;border-radius:999px;
+    border:1px solid #262b33;font-size:.8rem;text-decoration:none;color:#9aa4b2}
+  .chip.on{background:#17303c;color:#89dbff;border-color:#17303c}
+  section{padding:1rem 1.25rem;border-bottom:1px solid #262b33}
+  section h2{font-size:.9rem;margin:0 0 .6rem;color:#9aa4b2}
   table{border-collapse:collapse;width:100%}
   td{border-bottom:1px solid #1b2027;padding:.4rem .6rem;vertical-align:top}
   .mono{font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
@@ -468,16 +644,54 @@ function adminHtml(events: Stored[]): string {
   .tag.report{background:#3b1d1d;color:#f8b4b4}
   .tag.beacon{background:#17303c;color:#89dbff}
   .empty{padding:3rem 1.25rem;color:#9aa4b2}
+  form.inline{display:inline}
+  .block-form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+  .block-form input[type=text]{padding:.4rem .5rem;border-radius:7px;border:1px solid #262b33;
+    background:#0f1115;color:#e6e9ef;font:inherit}
+  .block-form input[name=infohash]{font-family:ui-monospace,Menlo,monospace;min-width:22rem;flex:1 1 22rem}
+  button{font:inherit;cursor:pointer}
+  .block-form button{padding:.4rem .8rem;border-radius:7px;border:0;background:#2563eb;color:#fff;font-weight:600}
+  .mini{font-size:.7rem;padding:.05rem .35rem;margin-left:.4rem;border-radius:5px;border:1px solid #3a2020;
+    background:transparent;color:#f8b4b4}
+  .mini:hover{background:#3b1d1d}
+  ul.blocked{list-style:none;margin:.75rem 0 0;padding:0}
+  ul.blocked li{display:flex;align-items:center;gap:.6rem;padding:.35rem 0;border-bottom:1px solid #1b2027}
+  ul.blocked code{color:#f8b4b4;font-size:.8rem}
+  .danger{color:#f87171;background:transparent;border:1px solid #3a2020;border-radius:5px;padding:.1rem .5rem}
+  .pager{display:flex;align-items:center;gap:.75rem;padding:1rem 1.25rem}
+  .btn{padding:.35rem .7rem;border-radius:7px;border:1px solid #262b33;text-decoration:none;color:#e6e9ef}
+  .btn.off{color:#4b5563;border-color:#1b2027;cursor:default}
+  .btn.ghost{margin-left:auto;color:#9aa4b2}
 </style></head><body>
 <header>
-  <h1>telemetry — ${events.length} recent event${events.length === 1 ? "" : "s"}
+  <h1>telemetry
     <a href="/_admin?logout" style="float:right;font-size:.8rem;color:#9aa4b2">sign out</a></h1>
-  <div>${summary || '<span class="small">nothing yet</span>'}</div>
+  <div>${summary || '<span class="small">nothing on this page</span>'}</div>
+  <div style="margin-top:.5rem">
+    ${filter("all", null)}${filter("beacons", "beacon")}${filter("reports", "report")}
+  </div>
 </header>
+
+<section id="blocklist">
+  <h2>Blocklist — take a site down (${blocked.length})</h2>
+  <form method="post" action="/_admin" class="block-form">
+    <input type="hidden" name="action" value="block">
+    <input type="text" name="infohash" placeholder="infohash (40 hex or 32 base32)"
+      pattern="[0-9a-fA-F]{40}|[A-Za-z2-7]{32}" required>
+    <input type="text" name="reason" placeholder="reason (optional)">
+    <button type="submit">Block</button>
+  </form>
+  ${
+    blocked.length
+      ? `<ul class="blocked">${blockedRows}</ul>`
+      : `<p class="small">Nothing blocked. Blocking an infohash makes <code>&lt;hash&gt;.unhosted.dev</code> return a takedown notice instead of the site.</p>`
+  }
+</section>
+
 ${
     events.length
-      ? `<table><tbody>${rows}</tbody></table>`
-      : `<p class="empty">No events stored yet. They arrive as browsers hit errors, send beacons, or the Reporting API fires.</p>`
+      ? `<table><tbody>${rows}</tbody></table>${pager}`
+      : `<p class="empty">No events on this page.</p>${pager}`
   }
 </body></html>`;
 }
