@@ -44,6 +44,89 @@ export async function isBlocked(infoHash: string): Promise<boolean> {
   return !!(await kv.get<Blocked>(["blocked", infoHash.toLowerCase()])).value;
 }
 
+// --- Registry gate -------------------------------------------------------------------------
+// unhosted.dev only serves infohashes that were created through the drop page (which POSTs
+// /_register at seed time). An unregistered hash is refused, so the domain can't be pointed at
+// an arbitrary swarm as a general WebTorrent→HTTPS gateway. Honest limit: /_register trusts the
+// client's manifest, so a forged POST can still register. This raises the bar from "zero effort"
+// to "craft a registration", and blocks the honest-client case (you can't drop a movie folder
+// through the UI — it fails validation). Info-dict→infohash verification would close the gap.
+
+type SiteRec = { at: number; ownerKeyHash: string; meta: unknown };
+
+/** Was this infohash registered through the drop page? Called by the server per site request. */
+export async function isRegistered(infoHash: string): Promise<boolean> {
+  if (!isInfoHash(infoHash)) return false;
+  return !!(await kv.get<SiteRec>(["site", infoHash.toLowerCase()])).value;
+}
+
+// A site must look like a website: have an index.html, stay within caps, and use only
+// web-ish file types. Kills the "host a movie/archive" case for anyone using the real UI.
+const ALLOWED_EXT = new Set([
+  "html",
+  "htm",
+  "css",
+  "js",
+  "mjs",
+  "json",
+  "map",
+  "svg",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "ico",
+  "bmp",
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "eot",
+  "txt",
+  "md",
+  "xml",
+  "webmanifest",
+  "wasm",
+  "mp3",
+  "mp4",
+  "webm",
+  "ogg",
+  "oga",
+  "wav",
+  "m4a",
+  "pdf",
+  "csv",
+  "glb",
+  "gltf",
+  "vtt",
+  "atom",
+  "rss",
+]);
+const MAX_SITE_FILES = 2000;
+const MAX_SITE_BYTES = 500 * 1024 * 1024; // 500 MB — a static site, not an archive
+
+/** Validate the client-supplied site summary at registration. */
+function validateSite(meta: unknown): { ok: true } | { ok: false; reason: string } {
+  const m = meta as {
+    count?: unknown;
+    bytes?: unknown;
+    hasIndex?: unknown;
+    exts?: unknown;
+  };
+  const count = Number(m?.count);
+  if (!Number.isFinite(count) || count < 1) return { ok: false, reason: "no files" };
+  if (count > MAX_SITE_FILES) return { ok: false, reason: "too many files" };
+  const bytes = Number(m?.bytes);
+  if (Number.isFinite(bytes) && bytes > MAX_SITE_BYTES) return { ok: false, reason: "too large" };
+  if (!m?.hasIndex) return { ok: false, reason: "no index.html" };
+  const exts = Array.isArray(m?.exts) ? m.exts.map((e) => String(e).toLowerCase()) : [];
+  const bad = exts.find((e) => e && !ALLOWED_EXT.has(e));
+  if (bad) return { ok: false, reason: `disallowed file type: .${bad}` };
+  return { ok: true };
+}
+
 async function blockedList(): Promise<Array<{ hash: string } & Blocked>> {
   const out: Array<{ hash: string } & Blocked> = [];
   for await (const e of kv.list<Blocked>({ prefix: ["blocked"] }, { limit: 500 })) {
@@ -181,6 +264,15 @@ export async function handleTelemetry(
     const b = body as { infoHash?: unknown; ownerKeyHash?: unknown; meta?: unknown };
     if (!isInfoHash(b?.infoHash) || typeof b?.ownerKeyHash !== "string") {
       return new Response("bad request", { status: 400, headers: cors });
+    }
+    // Gate: a registration must look like a website (index.html, web file types, size caps).
+    // This is what makes the registry gate meaningful — you can't register a movie/archive.
+    const check = validateSite(b.meta);
+    if (!check.ok) {
+      return new Response(JSON.stringify({ error: check.reason }), {
+        status: 422,
+        headers: { ...cors, "content-type": "application/json; charset=utf-8" },
+      });
     }
     const ih = b.infoHash.toLowerCase();
     // First writer wins: do not let a later caller overwrite an existing owner key.

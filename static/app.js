@@ -30,17 +30,56 @@ async function registerSite(infoHash, meta) {
       localStorage.setItem(storeKey, key);
     } catch { /* private mode: the link below still works this session */ }
   }
+  const activityUrl = `/_site?hash=${infoHash}&key=${key}`;
   try {
     const ownerKeyHash = await sha256Hex(key);
-    await fetch("/_register", {
+    const res = await fetch("/_register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ infoHash, ownerKeyHash, meta }),
     });
+    if (!res.ok) {
+      let reason = `registration failed (${res.status})`;
+      try {
+        reason = (await res.json()).error || reason;
+      } catch { /* non-JSON */ }
+      console.warn(LOG, "register rejected:", reason);
+      // 422 = the site failed validation, so it will NOT be served on unhosted.dev.
+      return { activityUrl: null, ok: false, reason };
+    }
   } catch (err) {
+    // A network error should not block the UX; the site is still seeding, and if it was
+    // registered on a prior load the gate still passes.
     console.warn(LOG, "register failed (activity log may be unavailable):", err);
   }
-  return `/_site?hash=${infoHash}&key=${key}`;
+  return { activityUrl, ok: true, reason: null };
+}
+
+/**
+ * Build the registration summary the server validates against (index.html present, web file
+ * types, size caps) and stores for the admin per-site view. Keep the allowlist logic in step
+ * with ALLOWED_EXT in telemetry.ts.
+ */
+function siteMeta(files, name) {
+  let bytes = 0;
+  let hasIndex = false;
+  const exts = new Set();
+  for (const f of files) {
+    const path = f.fullPath || f.name || "";
+    bytes += f.size || 0;
+    if (/(^|\/)index\.html?$/i.test(path)) hasIndex = true;
+    const ext = path.includes(".") ? path.split(".").pop().toLowerCase() : "";
+    if (ext) exts.add(ext);
+  }
+  return {
+    name: name ?? null,
+    count: files.length,
+    bytes,
+    hasIndex,
+    exts: [...exts].slice(0, 60),
+    // A short sample of paths for the admin per-site drill-down; not the whole tree.
+    sample: files.slice(0, 50).map((f) => ({ path: f.fullPath || f.name, size: f.size || 0 })),
+  };
 }
 
 const dropEl = document.getElementById("drop");
@@ -381,12 +420,20 @@ function seed(files) {
     persistEl.checked = persistIndex().some((x) => x.infoHash === torrent.infoHash);
     if ("share" in navigator) shareBtnEl.hidden = false;
 
-    // Register the site and reveal the owner's private activity log.
-    registerSite(torrent.infoHash, { name: name ?? null, files: files.length, bytes: total })
-      .then((activityUrl) => {
-        activityEl.href = activityUrl;
+    // Register the site (this also gates it into unhosted.dev) and reveal the activity log.
+    registerSite(torrent.infoHash, siteMeta(files, name)).then((r) => {
+      if (r.ok && r.activityUrl) {
+        activityEl.href = r.activityUrl;
         activityEl.hidden = false;
-      });
+      } else if (!r.ok) {
+        dotEl.classList.remove("is-live");
+        stateEl.textContent = "Not servable on unhosted.dev";
+        fail(
+          "This won't be served on unhosted.dev: " + (r.reason || "it must be a website") +
+            ". It needs an index.html and only web file types (no video archives, etc.).",
+        );
+      }
+    });
 
     const tick = () => {
       statsEl.textContent = `${torrent.numPeers} peer${torrent.numPeers === 1 ? "" : "s"} · ` +
@@ -490,7 +537,7 @@ globalThis.__wtdSeed = (specs) => {
   return new Promise((resolve, reject) => {
     try {
       getClient().seed(all, { name: root || undefined, announce: TRACKERS }, (torrent) => {
-        registerSite(torrent.infoHash, { name: root ?? null, files: all.length });
+        registerSite(torrent.infoHash, siteMeta(all, root));
         resolve({
           infoHash: torrent.infoHash,
           magnet: torrent.magnetURI,

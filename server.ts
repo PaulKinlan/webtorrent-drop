@@ -15,7 +15,7 @@
 //
 //   deno task dev     # http://localhost:8000
 
-import { handleTelemetry, isBlocked } from "./telemetry.ts";
+import { handleTelemetry, isBlocked, isRegistered } from "./telemetry.ts";
 
 const PORT = Number(Deno.env.get("PORT") ?? 8000);
 
@@ -98,6 +98,27 @@ It is no longer served here.</p>
   });
 }
 
+// An infohash that was never registered through the drop page. We refuse to be a gateway for
+// arbitrary swarms, so this returns 404 rather than the bootstrap.
+function notHostedResponse(hash: string): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>not hosted here · unhosted.dev</title>
+<style>body{font:15px/1.6 system-ui,sans-serif;background:#0f1115;color:#e6e9ef;display:grid;
+place-items:center;min-height:100dvh;margin:0;padding:1.5rem}main{max-width:32rem;text-align:center}
+h1{font-size:1.15rem}code{font-family:ui-monospace,Menlo,monospace;font-size:.8rem;color:#9aa4b2;
+word-break:break-all}a{color:#6ea8fe}</style></head><body><main>
+<h1>Nothing is hosted at this address</h1>
+<p>unhosted.dev only serves sites created through its own page. This infohash was not, so it
+is not served here. To share a site, drop a folder at <a href="https://unhosted.dev/">unhosted.dev</a>.</p>
+<p><code>${hash}</code></p>
+</main></body></html>`;
+  return new Response(html, {
+    status: 404,
+    headers: { "content-type": "text/html; charset=utf-8", "referrer-policy": "no-referrer" },
+  });
+}
+
 Deno.serve({ port: PORT }, async (req, info) => {
   const url = new URL(req.url);
   const path = url.pathname;
@@ -134,9 +155,12 @@ Deno.serve({ port: PORT }, async (req, info) => {
   // On a site's subdomain, every non-reserved path serves the shell. On a first visit (or a
   // shared deep link before the SW is active) the shell downloads the torrent, caches it, and
   // reloads — after which the service worker serves that path from cache at its real URL.
-  // A blocked infohash gets a takedown notice instead — this domain stops being its gateway.
+  // A blocked infohash gets a takedown notice. An unregistered one gets "not hosted here" —
+  // the registry gate, so this domain only serves sites created through the drop page and can't
+  // be pointed at an arbitrary swarm.
   if (hostHash) {
     if (await isBlocked(hostHash)) return blockedResponse(hostHash);
+    if (!(await isRegistered(hostHash))) return notHostedResponse(hostHash);
     return staticFile("viewer.html", HTML_HEADERS);
   }
 
@@ -144,6 +168,7 @@ Deno.serve({ port: PORT }, async (req, info) => {
   const first = path.slice(1).split("/")[0];
   if (first && isInfoHash(first)) {
     if (await isBlocked(first)) return blockedResponse(first);
+    if (!(await isRegistered(first))) return notHostedResponse(first);
     return staticFile("viewer.html", HTML_HEADERS);
   }
 
