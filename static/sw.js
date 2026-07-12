@@ -53,19 +53,22 @@ function harden(headers) {
   return headers;
 }
 
-// App assets and APIs the SW must NOT intercept — they always come from the origin.
+// Platform runtime the SW must NOT intercept on a site's subdomain — these always come from the
+// origin (the shell, the SW itself, its imports, the telemetry endpoints). Everything else is
+// the hosted site's own namespace, served from cache. Note what is DELIBERATELY not here:
+// /app.js, /styles.css, /favicon.ico, /ide.js — those are apex-only (the drop page + editor), so
+// a hosted site is free to have its own files with those names. Reserving them would shadow the
+// site's real files with platform assets (the bug where a demo's own app.js never loaded).
 function isReserved(path) {
   if (path.startsWith("/vendor/")) return true;
   if (path.startsWith("/_")) return true; // /_beacon /_report /_register /_site /_admin /__wtd
   return [
     "/sw.js",
     "/viewer.js",
+    "/viewer.html",
     "/reseed.js",
     "/common.js",
     "/telemetry.js",
-    "/app.js",
-    "/styles.css",
-    "/favicon.ico",
   ].includes(path);
 }
 
