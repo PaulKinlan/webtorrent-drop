@@ -56,9 +56,14 @@ export function mimeFor(path) {
   return MIME[ext] ?? "application/octet-stream";
 }
 
-/** The single path segment shared by every file, e.g. "myfolder", or "" if there is none. */
+/**
+ * The single path segment shared by every file, e.g. "myfolder", or "" if there is none.
+ * Prefer the FULL path (`fullPath` on dropped File objects, `path` on WebTorrent's torrent.files)
+ * over `name` — WebTorrent sets `.name` to the basename, which would hide the common folder and
+ * leave every file served under "/myfolder/…" instead of the root.
+ */
 export function commonRoot(files) {
-  const firsts = files.map((f) => (f.fullPath || f.name || f.path).split("/"));
+  const firsts = files.map((f) => (f.fullPath || f.path || f.name).split("/"));
   if (!firsts.length || !firsts.every((p) => p.length > 1)) return "";
   const root = firsts[0][0];
   return firsts.every((p) => p[0] === root) ? root : "";
@@ -74,7 +79,7 @@ export function relPath(fullPath, root) {
 export function generateIndexHtml(files, root) {
   const rows = files
     .map((f) => {
-      const rel = relPath(f.fullPath || f.name || f.path, root);
+      const rel = relPath(f.fullPath || f.path || f.name, root);
       const href = rel.split("/").map(encodeURIComponent).join("/");
       const safe = rel.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       return `      <li><a href="${href}">${safe}</a><span>${
